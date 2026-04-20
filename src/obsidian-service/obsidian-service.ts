@@ -24,6 +24,16 @@ function slugify(input: string): string {
     .slice(0, 60);
 }
 
+function safeNotePath(vaultPath: string, title: string): string {
+  const filename = `${slugify(title) || "nota"}.md`;
+  const candidate = path.resolve(vaultPath, filename);
+  const root = path.resolve(vaultPath);
+  if (!candidate.startsWith(root + path.sep) && candidate !== root) {
+    throw new Error("invalid_note_path");
+  }
+  return candidate;
+}
+
 function hashText(input: string): string {
   return crypto.createHash("sha256").update(input.trim()).digest("hex");
 }
@@ -35,21 +45,41 @@ function renderMarkdown(title: string, content: string): string {
 export class ObsidianService {
   public constructor(private readonly vaultPath: string) {}
 
+  public getVaultPath(): string {
+    return path.resolve(this.vaultPath);
+  }
+
+  public async getVaultStatus(): Promise<{ path: string; exists: boolean }> {
+    const resolvedPath = this.getVaultPath();
+    try {
+      const stat = await fs.stat(resolvedPath);
+      return {
+        path: resolvedPath,
+        exists: stat.isDirectory()
+      };
+    } catch {
+      return {
+        path: resolvedPath,
+        exists: false
+      };
+    }
+  }
+
   public async init(): Promise<void> {
     await fs.mkdir(this.vaultPath, { recursive: true });
   }
 
   public async createNote(input: CreateNoteInput): Promise<CreatedNote> {
     const normalizedTitle = input.title.trim() || "nota";
-    const filename = `${slugify(normalizedTitle) || "nota"}.md`;
-    const filePath = path.join(this.vaultPath, filename);
+    const filePath = safeNotePath(this.vaultPath, normalizedTitle);
     const rendered = renderMarkdown(normalizedTitle, input.content);
     const requestedHash = hashText(input.content);
 
     try {
       const existing = await fs.readFile(filePath, "utf-8");
-      const existingHash = hashText(existing);
-      if (existingHash === requestedHash || existing.includes(input.content.trim())) {
+      const existingBody = existing.split("\n").slice(3).join("\n").trim();
+      const existingHash = hashText(existingBody);
+      if (existingHash === requestedHash || existingBody.includes(input.content.trim())) {
         return {
           filePath,
           title: normalizedTitle,
@@ -91,4 +121,3 @@ export class ObsidianService {
     return matched;
   }
 }
-

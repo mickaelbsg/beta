@@ -234,5 +234,12 @@ export const commandDefinitions: CommandDefinition[] = [
     handler: "editRule",
     category: "Guardrails",
     needsContext: true
+  },
+  {
+    name: "/claude_code",
+    usage: "/claude_code <instrucao>",
+    description: "Executa uma instrucao no Claude Code CLI (restrito)",
+    handler: "claudeCode",
+    category: "Sistema"
   }
 ];

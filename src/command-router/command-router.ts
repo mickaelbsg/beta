@@ -156,6 +156,9 @@ export class CommandRouter {
     if (parsed.name === "/edit_rule") {
       return this.handlers.editRule(parsed.args, observer);
     }
+    if (parsed.name === "/claude_code") {
+      return this.handlers.claudeCode(parsed.args, context, observer);
+    }
     // Keep fallback aligned with command catalog.
     const known = new Set(commandDefinitions.map((item) => item.name));
     if (!known.has(parsed.name)) {

@@ -38,6 +38,10 @@ describe("SqliteHistoryRepository", () => {
 
     const recent = await repo.getRecentMessages("chat-1", 2);
     expect(recent.map((m) => m.id)).toEqual(["2", "3"]);
+
+    const deleted = await repo.clearChatHistory("chat-1");
+    expect(deleted).toBe(3);
+    const afterReset = await repo.getRecentMessages("chat-1", 5);
+    expect(afterReset).toEqual([]);
   });
 });
-

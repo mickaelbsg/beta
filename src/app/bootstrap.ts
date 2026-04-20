@@ -34,6 +34,7 @@ import { FeedbackService } from "../optimization/feedback-service.js";
 import { UserProfileService } from "../optimization/user-profile-service.js";
 import { FileSystemService } from "../filesystem/filesystem-service.js";
 import { ShellSessionService } from "../shell/shell-session-service.js";
+import { spawnSync } from "node:child_process";
 
 async function buildMemoryRepository(
   qdrantUrl: string,
@@ -151,7 +152,26 @@ async function main(): Promise<void> {
     fallbackProvider
   });
   const openCodeExecutor: Executor | undefined =
-    cfg.EXECUTOR_MODE === "opencode" ? new OpenCodeExecutor(null, llmExecutor) : undefined;
+    cfg.EXECUTOR_MODE === "opencode"
+      ? (() => {
+          // Verifica disponibilidade do Claude Code CLI antes de instanciar
+          try {
+            const check = spawnSync("claude", ["--version"]);
+            if (typeof check.status === "number" && check.status === 0) {
+              return new OpenCodeExecutor(null, llmExecutor);
+            }
+            logger.warn("claude_cli_not_found_opencode_disabled", {
+              status: check.status,
+              stderr: check.stderr ? check.stderr.toString().slice(0, 200) : null
+            });
+          } catch (err) {
+            logger.warn("claude_cli_check_failed_opencode_disabled", {
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+          return undefined;
+        })()
+      : undefined;
   const executorRouter = new ExecutorRouter(llmExecutor, openCodeExecutor);
 
   const webSearch = new ResilientWebSearchService({

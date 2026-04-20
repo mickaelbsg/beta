@@ -476,6 +476,29 @@ export class CommandHandlers {
     }
   }
 
+  public async claudeCode(arg: string, context?: CommandContext, observer?: InteractionObserver): Promise<string> {
+    const trimmed = String(arg || "").trim();
+    if (!trimmed) {
+      return "Uso: /claude_code <instrucao>";
+    }
+
+    // Double-check user context for authorization (Telegram-level checks also apply)
+    if (!context?.userId) {
+      return "Nao foi possivel identificar o usuario para executar o Claude Code.";
+    }
+
+    await observer?.report("Executando instrucao via Claude Code CLI");
+    try {
+      const { ClaudeService } = await import("../services/claude-service.js");
+      const svc = new ClaudeService();
+      const res = await svc.run(trimmed);
+      const text = String(res?.text || "").slice(0, 32000);
+      return text || "Claude retornou sem saida.";
+    } catch (error) {
+      return `Falha ao executar Claude Code: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
   public async fileSystemRead(arg: string, observer?: InteractionObserver): Promise<string> {
     const target = arg.trim();
     if (!target) {
@@ -521,7 +544,7 @@ export class CommandHandlers {
     if (!normalized) {
       return "Uso: /find <nome> [raiz_opcional]";
     }
-    await observer?.report(`Buscando caminhoes que correspondam a: ${normalized}`);
+    await observer?.report(`Buscando caminhos que correspondam a: ${normalized}`);
     const [query, root] = normalized.split(/\s+/, 2);
     try {
       const results = await this.deps.fileSystemService.findPaths(query, root);

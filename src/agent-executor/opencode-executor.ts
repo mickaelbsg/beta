@@ -19,6 +19,7 @@ export class OpenCodeExecutor implements Executor {
       return this.fallbackExecutor.execute(request);
     }
 
+    const startedAt = Date.now();
     try {
       const context = JSON.stringify(
         {
@@ -40,11 +41,16 @@ export class OpenCodeExecutor implements Executor {
       return {
         replyText: result.text,
         shouldPersistMemory: false,
-        shouldCreateNote: false
+        shouldCreateNote: false,
+        debug: {
+          provider: "opencode",
+          model: "opencode",
+          latencyMs: Date.now() - startedAt,
+          usedFallback: false
+        }
       };
     } catch {
       return this.fallbackExecutor.execute(request);
     }
   }
 }
-

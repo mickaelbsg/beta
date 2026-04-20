@@ -13,6 +13,10 @@ function hashText(input: string): string {
   return crypto.createHash("sha256").update(input.trim()).digest("hex");
 }
 
+function shortIdFrom(rawId: string): string {
+  return `mem_${rawId.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toLowerCase()}`;
+}
+
 export class QdrantMemoryRepository implements MemoryRepository {
   private readonly client: QdrantClient;
 
@@ -50,6 +54,7 @@ export class QdrantMemoryRepository implements MemoryRepository {
       source: record.source,
       createdAt: record.timestamp,
       contentHash: hashText(record.text),
+      shortId: String(record.metadata?.shortId ?? shortIdFrom(id)),
       ...(record.metadata ?? {})
     };
 
@@ -69,16 +74,21 @@ export class QdrantMemoryRepository implements MemoryRepository {
       text: record.text,
       source: record.source,
       timestamp: record.timestamp,
-      metadata: record.metadata
+      metadata: payload
     };
   }
 
   public async searchMemories(queryEmbedding: number[], topK: number): Promise<MemoryRecord[]> {
-    const results = await this.client.search(this.args.collectionName, {
-      vector: queryEmbedding,
-      limit: topK,
-      with_payload: true
-    });
+    let results;
+    try {
+      results = await this.client.search(this.args.collectionName, {
+        vector: queryEmbedding,
+        limit: topK,
+        with_payload: true
+      });
+    } catch {
+      return [];
+    }
 
     return results.map((result) => {
       const payload = result.payload as Record<string, unknown>;
@@ -95,21 +105,26 @@ export class QdrantMemoryRepository implements MemoryRepository {
 
   public async findNearDuplicate(text: string): Promise<MemoryRecord | null> {
     const contentHash = hashText(text);
-    const result = await this.client.scroll(this.args.collectionName, {
-      limit: 1,
-      with_payload: true,
-      with_vector: false,
-      filter: {
-        must: [
-          {
-            key: "contentHash",
-            match: {
-              value: contentHash
+    let result;
+    try {
+      result = await this.client.scroll(this.args.collectionName, {
+        limit: 1,
+        with_payload: true,
+        with_vector: false,
+        filter: {
+          must: [
+            {
+              key: "contentHash",
+              match: {
+                value: contentHash
+              }
             }
-          }
-        ]
-      }
-    });
+          ]
+        }
+      });
+    } catch {
+      return null;
+    }
 
     const point = result.points[0];
     if (!point) {
@@ -125,5 +140,95 @@ export class QdrantMemoryRepository implements MemoryRepository {
       metadata: payload
     };
   }
-}
 
+  public async listMemories(limit: number): Promise<MemoryRecord[]> {
+    try {
+      const result = await this.client.scroll(this.args.collectionName, {
+        limit,
+        with_payload: true,
+        with_vector: false
+      });
+      const sorted = [...result.points].sort((a, b) => {
+        const aTs = String((a.payload as Record<string, unknown>)?.createdAt ?? "");
+        const bTs = String((b.payload as Record<string, unknown>)?.createdAt ?? "");
+        return bTs.localeCompare(aTs);
+      });
+      return sorted.map((point) => {
+        const payload = point.payload as Record<string, unknown>;
+        const id = String(point.id);
+        const shortId = String(payload.shortId ?? shortIdFrom(id));
+        return {
+          id,
+          text: String(payload.text ?? ""),
+          source: (payload.source as "chat" | "obsidian") ?? "chat",
+          timestamp: String(payload.createdAt ?? new Date().toISOString()),
+          metadata: {
+            ...payload,
+            shortId
+          }
+        };
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  public async deleteMemoryByShortId(shortId: string): Promise<boolean> {
+    try {
+      const point = await this.findPointByShortId(shortId);
+      if (!point) {
+        return false;
+      }
+      await this.client.delete(this.args.collectionName, {
+        wait: true,
+        points: [point.id]
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public async getMemoryByShortId(shortId: string): Promise<MemoryRecord | null> {
+    try {
+      const point = await this.findPointByShortId(shortId);
+      if (!point) {
+        return null;
+      }
+      const payload = point.payload as Record<string, unknown>;
+      const id = String(point.id);
+      return {
+        id,
+        text: String(payload.text ?? ""),
+        source: (payload.source as "chat" | "obsidian") ?? "chat",
+        timestamp: String(payload.createdAt ?? new Date().toISOString()),
+        score: typeof payload.memoryScore === "number" ? payload.memoryScore : undefined,
+        metadata: {
+          ...payload,
+          shortId: String(payload.shortId ?? shortIdFrom(id))
+        }
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private async findPointByShortId(shortId: string) {
+    const found = await this.client.scroll(this.args.collectionName, {
+      limit: 1,
+      with_payload: true,
+      with_vector: false,
+      filter: {
+        must: [
+          {
+            key: "shortId",
+            match: {
+              value: shortId
+            }
+          }
+        ]
+      }
+    });
+    return found.points[0] ?? null;
+  }
+}

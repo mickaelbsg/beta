@@ -14,7 +14,9 @@ class FakeMemoryRepository implements MemoryRepository {
   public async init(): Promise<void> {
     return;
   }
-  public async saveMemory(record: Omit<MemoryRecord, "id"> & { id?: string }): Promise<MemoryRecord> {
+  public async saveMemory(
+    record: Omit<MemoryRecord, "id"> & { id?: string; vector: number[] }
+  ): Promise<MemoryRecord> {
     const saved: MemoryRecord = {
       id: record.id ?? "id-1",
       text: record.text,
@@ -29,16 +31,18 @@ class FakeMemoryRepository implements MemoryRepository {
     return [
       {
         id: "1",
-        text: "mesmo texto",
+        text: "query mesmo texto",
         source: "chat",
         timestamp: "2026-01-01T00:00:00.000Z",
+        score: 0.8,
         metadata: { contentHash: "h1" }
       },
       {
         id: "2",
-        text: "mesmo texto",
+        text: "query mesmo texto",
         source: "chat",
         timestamp: "2026-01-01T00:00:00.001Z",
+        score: 0.79,
         metadata: { contentHash: "h1" }
       }
     ];
@@ -46,16 +50,27 @@ class FakeMemoryRepository implements MemoryRepository {
   public async findNearDuplicate(_text: string): Promise<MemoryRecord | null> {
     return null;
   }
+  public async listMemories(_limit: number): Promise<MemoryRecord[]> {
+    return this.records;
+  }
+  public async getMemoryByShortId(_shortId: string): Promise<MemoryRecord | null> {
+    return this.records[0] ?? null;
+  }
+  public async deleteMemoryByShortId(_shortId: string): Promise<boolean> {
+    return true;
+  }
 }
 
 describe("RagService", () => {
   it("deduplicates retrieval results", async () => {
     const rag = new RagService(
       new FakeEmbeddingService() as unknown as EmbeddingService,
-      new FakeMemoryRepository()
+      new FakeMemoryRepository(),
+      0.45,
+      0.92,
+      60_000
     );
     const items = await rag.retrieveRelevantMemories("query", 5);
     expect(items.length).toBe(1);
   });
 });
-

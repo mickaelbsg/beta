@@ -24,5 +24,16 @@ export class NullMemoryRepository implements MemoryRepository {
   public async findNearDuplicate(_text: string): Promise<MemoryRecord | null> {
     return null;
   }
-}
 
+  public async listMemories(_limit: number): Promise<MemoryRecord[]> {
+    return [];
+  }
+
+  public async getMemoryByShortId(_shortId: string): Promise<MemoryRecord | null> {
+    return null;
+  }
+
+  public async deleteMemoryByShortId(_shortId: string): Promise<boolean> {
+    return false;
+  }
+}

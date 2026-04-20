@@ -4,14 +4,15 @@ import Database from "better-sqlite3";
 import type { ConversationMessage, HistoryRepository } from "../shared/types.js";
 
 export class SqliteHistoryRepository implements HistoryRepository {
-  private db: Database.Database;
+  private db: Database.Database | null = null;
 
   public constructor(private readonly dbPath: string) {
-    this.db = new Database(dbPath);
+    // Open lazily in init after ensuring parent directory exists.
   }
 
   public async init(): Promise<void> {
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
+    this.db = new Database(this.dbPath);
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS messages (
@@ -35,6 +36,9 @@ export class SqliteHistoryRepository implements HistoryRepository {
   }
 
   public async saveMessage(message: ConversationMessage): Promise<void> {
+    if (!this.db) {
+      throw new Error("sqlite_not_initialized");
+    }
     const stmt = this.db.prepare(`
       INSERT OR IGNORE INTO messages (id, chat_id, role, content, intent, timestamp)
       VALUES (@id, @chat_id, @role, @content, @intent, @timestamp)
@@ -50,6 +54,9 @@ export class SqliteHistoryRepository implements HistoryRepository {
   }
 
   public async getRecentMessages(chatId: string, limit: number): Promise<ConversationMessage[]> {
+    if (!this.db) {
+      throw new Error("sqlite_not_initialized");
+    }
     const stmt = this.db.prepare(`
       SELECT id, chat_id, role, content, intent, timestamp
       FROM messages
@@ -77,5 +84,16 @@ export class SqliteHistoryRepository implements HistoryRepository {
       }))
       .reverse();
   }
-}
 
+  public async clearChatHistory(chatId: string): Promise<number> {
+    if (!this.db) {
+      throw new Error("sqlite_not_initialized");
+    }
+    const stmt = this.db.prepare(`
+      DELETE FROM messages
+      WHERE chat_id = ?
+    `);
+    const result = stmt.run(chatId);
+    return result.changes;
+  }
+}
