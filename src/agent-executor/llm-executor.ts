@@ -3,6 +3,8 @@ import { logger } from "../shared/logger.js";
 import { PromptBuilder } from "./prompt-builder.js";
 import type { LLMProvider } from "./providers/llm-provider.js";
 
+import { detectActionIntent } from "./action-intent-detector.js";
+
 interface LlmExecutorArgs {
   model: string;
   fallbackModel?: string;
@@ -74,11 +76,34 @@ export class LlmExecutor implements Executor {
     for (const candidate of candidates) {
       const startedAt = Date.now();
       try {
-        const result = await candidate.provider.generateResponse({
+        let result = await candidate.provider.generateResponse({
           request,
           prompt,
           model: candidate.model
         });
+
+        // --- ENFORCEMENT DE TOOL USE ---
+        const intent = detectActionIntent(result.replyText);
+        const missingTool = intent.hasIntent && (!result.toolCalls || result.toolCalls.length === 0);
+
+        if (missingTool) {
+          logger.warn("tool_enforcement_triggered", {
+            module: "LlmExecutor",
+            action: "execute",
+            intentType: intent.type,
+            textPreview: result.replyText.slice(0, 100)
+          });
+
+          // Retry único com instrução de choque
+          result = await candidate.provider.generateResponse({
+            request: {
+              ...request,
+              userMessage: `${request.userMessage}\n\n[ERRO DE EXECUÇÃO]: Você disse que iria agir mas não usou ferramentas. NÃO descreva ações em texto. Use o campo 'toolCalls' agora para executar o que prometeu.`
+            },
+            prompt,
+            model: candidate.model
+          });
+        }
 
         const candidateContext = {
           module: "LlmExecutor",

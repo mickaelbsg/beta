@@ -10,11 +10,11 @@ interface BuildContextInput {
 export class ContextBuilder {
   public buildContext(input: BuildContextInput): string {
     const historySection = input.history.length
-      ? input.history.map((message) => `- [${message.role}] ${message.content}`).join("\n")
+      ? input.history.slice(-6).map((message) => `- [${message.role}] ${message.content.slice(0, 500)}`).join("\n")
       : "- Sem historico recente.";
 
     const ragSection = input.ragContext.length
-      ? input.ragContext.map((memory) => `- ${memory.text}`).join("\n")
+      ? input.ragContext.slice(0, 3).map((memory) => `- ${memory.text.slice(0, 500)}`).join("\n")
       : "- Sem contexto de memoria adicional.";
 
     return [

@@ -6,65 +6,63 @@ O BETA é um assistente pessoal projetado para ser seu terminal remoto seguro e 
 
 ## 🔐 Princípios de Segurança
 
-1. **Sem Autonomia:** A IA não executa nada por conta própria.
-2. **Controle Total:** O usuário comanda, a IA assiste.
-3. **Guardrails:** Comandos sensíveis são bloqueados ou restritos a uma whitelist.
+1. **Sem Autonomia Espontânea:** A IA não executa nada por conta própria. Toda ação é disparada por comando ou intenção clara.
+2. **Controle Total:** O usuário comanda, o sistema executa, a IA assiste e explica.
+3. **Guardrails Determinísticos:** Comandos operacionais são validados por uma camada de código (Action Layer) antes de qualquer processamento da IA.
 
 ---
 
 ## 🧠 Sistema de Memória (Obsidian-First)
 
-O Obsidian é a **fonte única de verdade** do sistema. O BETA organiza seu conhecimento automaticamente no diretório configurado:
+O Obsidian é a **fonte única de verdade** do sistema. O BETA organiza seu conhecimento automaticamente:
 
-- `/knowledge/user/profile.md`: Suas informações pessoais, área de atuação e preferências (atualizado automaticamente).
-- `/journal/YYYY-MM-DD.md`: Seu diário técnico consolidado do dia.
-- `/inbox/`: Entrada rápida para notas diversas.
+- `/knowledge/user/profile.md`: Suas informações pessoais, área de atuação e preferências (atualizado de forma inteligente).
+- `/journal/YYYY-MM-DD.md`: Seu diário técnico consolidado do dia, gerado sob demanda.
+- `/inbox/`: Entrada rápida para notas diversas capturadas durante a conversa.
+- `/rules/rules.md`: Onde vivem suas regras customizadas que o sistema **nunca** desobedece.
 
 ---
 
 ## 🚀 Comandos Principais (Telegram)
 
-### 💻 Execução e Host
+### 💻 Execução e Host (Action Layer)
 
-- `/run <comando>`: Executa comandos no host local (whitelist: `docker, pm2, git, ls, cat`).
-- `/shell <cmd>`: Navegação básica no sistema (`pwd`, `ls`, `cd`, `cat`).
+- `/run <comando>`: Executa comandos no host local. Whitelist segura: `docker, pm2, git, ls, cat`.
+- `/shell <cmd>`: Navegação e leitura rápida de arquivos (`pwd`, `ls`, `cd`, `cat`).
 
-### 🤖 Assistente IA (Claude Code)
+### 🤖 Assistente IA (Ativo & Proativo)
 
-- `/ask <pergunta>`: Consulta técnica à IA sem execução de código. Preserva contexto da conversa.
-- `/build <instrução>`: Gera scripts ou blocos de código prontos para uso.
+- `/claude <instrução>`: Invoca o Claude Code CLI para tarefas pesadas de programação ou análise técnica.
+- `/ask <pergunta>`: Consulta técnica à IA preservando o contexto das últimas 10 mensagens.
+- `/build <instrução>`: Gera scripts ou blocos de código sem executá-los.
 
-### 📓 Conhecimento e Notas
+### 📓 Gestão de Conhecimento
 
-- `/note <texto>`: Salva uma nota estruturada diretamente no seu Obsidian e indexa para busca futura.
-- `/search <termo>`: Busca fatos e notas relevantes dentro do seu vault do Obsidian.
-- `/diary`: Gera uma síntese inteligente das suas atividades e aprendizados do dia e salva no seu diário.
+- `/note <texto>`: Salva uma nota estruturada no Obsidian e indexa para busca.
+- `/search <termo>`: Realiza uma busca profunda no seu vault do Obsidian.
+- `/diary`: Sintetiza suas interações do dia em um registro diário organizado.
 
 ### ⚙️ Gestão do Sistema
 
-- `/config`: Mostra as configurações ativas do sistema.
-- `/debug on|off`: Ativa detalhes técnicos nas respostas (tokens, latência, intenção).
-- `/reset_session`: Limpa o histórico recente da conversa (RAM) para começar um assunto novo.
+- `/config`: Mostra o estado atual do sistema e variáveis ativas.
+- `/debug on|off`: Ativa telemetria detalhada nas respostas (tokens, latência, ações).
+- `/reset_session`: Limpa o histórico imediato da conversa (RAM).
 
 ---
 
 ## 🛠️ Guia de Uso Rápido
 
 1. **Ensine o sistema sobre você:**
-   > Envie: "Meu nome é Mickael e trabalho com DevOps"
-   > O BETA atualizará seu `profile.md` e passará a te tratar pelo nome.
+   > Envie: "Meu nome é Alpha e trabalho com Engenharia de Dados"
+   > O sistema atualizará seu `profile.md` instantaneamente.
 
-2. **Salve uma descoberta técnica:**
-   > Envie: "/note aprendi que o keepalived usa o protocolo VRRP para alta disponibilidade"
-   > Isso será arquivado e poderá ser recuperado depois.
-
-3. **Recupere informação:**
-   > Envie: "O que eu falei sobre keepalived?"
-   > O BETA lerá suas notas e responderá com base nelas.
-
-4. **Gerencie seus containers:**
+2. **Execute com segurança:**
    > Envie: "/run docker ps"
-   > Veja o status dos seus serviços diretamente no chat.
+   > O sistema executa o comando e a IA explica o status dos seus serviços.
+
+3. **Recupere conhecimento:**
+   > Envie: "Busque na web sobre os novos recursos do Python 3.13"
+   > O braço **WEB** será acionado para trazer informações atualizadas.
 
 ---
 
@@ -73,27 +71,23 @@ O Obsidian é a **fonte única de verdade** do sistema. O BETA organiza seu conh
 ### Requisitos
 
 - Node.js 20+
-- Um vault do Obsidian local.
-- Bot no Telegram e token da API (OmniRoute ou OpenAI).
+- Vault do Obsidian local configurado em `OBSIDIAN_VAULT_PATH`.
+- Chaves de API (OmniRoute ou OpenAI) no `.env`.
 
 ### Instalação
 
 ```bash
 npm install
-cp .env.example .env
-# Configure suas chaves e o caminho do vault do Obsidian
 npm run build
 npm run dev
 ```
 
 ### CLI Interno
 
-Você também pode operar o sistema via terminal local:
-
 ```bash
-npm run cli -- note "Sua nota aqui"
-npm run cli -- search "termo de busca"
+npm run cli -- note "Minha nota técnica"
+npm run cli -- search "Kubernetes"
 ```
 
 ---
-*BETA — Mais do que um bot, sua infraestrutura com memória.*
+*BETA — O motorista do seu ecossistema técnico.*

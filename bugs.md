@@ -74,3 +74,15 @@
 - **Bug:** Regras cadastradas via `/set_rule` sumiam após reinicialização.
 - **Causa:** Persistência em arquivo local temporário.
 - **Solução:** Migradas todas as `rules` para o Obsidian em `/rules/rules.md`. Agora são permanentes e editáveis diretamente pelo vault.
+
+### 12. "Beta Reativo" (Passividade da IA)
+
+- **Bug:** O modelo de IA descrevia ações no texto ("Vou rodar o comando...", "Vou salvar...") mas não as executava de fato, agindo apenas como um chatbot.
+- **Causa:** O modelo ignorava o uso de ferramentas (`toolCalls`) em favor de respostas de texto educadas, e o sistema não tinha um mecanismo para validar se uma promessa de ação foi tecnicamente cumprida.
+- **Solução:** Implementado o `ActionIntentDetector` para ler as respostas da IA. Se uma intenção de ação for detectada sem uma chamada de ferramenta, o sistema dispara um **Retry Automático** com uma instrução de enforcement ("Pare de descrever e execute").
+
+### 13. Inconsistência na Action Layer (Bypass de Comandos)
+
+- **Bug:** Comandos como `/diary` e `/note` rodavam por caminhos paralelos, às vezes ignorando a Action Layer determinística ou a lógica de contexto da IA.
+- **Causa:** Duplicidade de lógica entre `CommandHandlers` e `ActionDecider`.
+- **Solução:** Unificação total do fluxo no `Orchestrator`. Agora, 100% dos inputs (chat ou comando `/`) passam primeiro pelo `ActionDecider` (Corpo) para execução física e depois pelo LLM (Voz) para explicação contextualizada.

@@ -66,10 +66,11 @@ export class TelegramMessageHandler {
       const fromId = msg.from?.id ? String(msg.from.id) : "";
       const messageId = String(msg.message_id);
 
-      if (!text) {
-        logger.info("telegram_non_text_ignored", {
+      if (!text || text.length < 3) {
+        logger.info("telegram_input_ignored", {
           chatId: String(msg.chat.id),
-          messageId
+          messageId,
+          reason: "text_too_short"
         });
         return;
       }
@@ -114,19 +115,12 @@ export class TelegramMessageHandler {
       };
 
       try {
-        // Commands follow a deterministic path; natural language stays in the orchestrator.
-        const isCommand = this.args.commandRouter.isCommand(text);
-        const response = isCommand
-          ? {
-              text: await this.args.commandRouter.handle(
-                text,
-                { chatId: inbound.chatId, userId: inbound.userId },
-                observer
-              )
-            }
-          : await this.args.orchestrator.handleMessage(inbound, observer);
+        // BETA v0.2.1: Todo input de texto passa pelo Orchestrator para garantir Action Layer determinística.
+        // O CommandRouter ainda pode ser usado para comandos que NÃO requerem IA, mas por padrão, o Orquestrador manda.
+        const response = await this.args.orchestrator.handleMessage(inbound, observer);
         await this.bot.sendMessage(msg.chat.id, response.text);
-        if (!isCommand) {
+
+        if (!this.args.commandRouter.isCommand(text)) {
           try {
             const diagnosis = await this.args.selfOptimizationService.diagnose();
             if (diagnosis.alertMessage) {
