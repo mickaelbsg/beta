@@ -27,7 +27,8 @@ import { DebugModeService } from "../debug/debug-mode-service.js";
 import { SelfOptimizationService } from "../optimization/self-optimization-service.js";
 import type { AgentLogEntryV2 } from "../optimization/agent-log-service.js";
 import { UserProfileService } from "../optimization/user-profile-service.js";
-import { decideAction, type Action } from "./action-decider.js";
+import { decideAction } from "./action-decider.js";
+import { RuleBasedIntentClassifier } from "./rule-based-intent-classifier.js";
 
 interface OrchestratorDeps {
   historyRepository: HistoryRepository;
@@ -131,9 +132,13 @@ function sanitizeResponse(text: string): string {
 export class Orchestrator {
   private readonly contextBuilder = new ContextBuilder();
   private readonly toolExecutor: ToolExecutor;
+  private readonly ruleClassifier = new RuleBasedIntentClassifier();
 
   public constructor(private readonly deps: OrchestratorDeps) {
-    this.toolExecutor = new ToolExecutor({ obsidianWriterService: deps.obsidianWriterService });
+    this.toolExecutor = new ToolExecutor({
+      obsidianWriterService: deps.obsidianWriterService,
+      webAgentService: deps.webAgentService
+    });
   }
 
   public async handleMessage(message: InboundMessage, observer?: InteractionObserver): Promise<OrchestratorResponse> {
@@ -170,8 +175,12 @@ export class Orchestrator {
         const runOutput = await this.toolExecutor.execute({ tool: "run", input: { command: action.command } }, message.chatId);
         actionResult = `Comando executado. Resultado:\n${runOutput}`;
       } else if (action.type === "SEARCH") {
-        const searchResults = await this.deps.obsidianWriterService?.searchObsidian(action.query) ?? [];
-        actionResult = searchResults.length > 0 ? `Resultados da busca no Obsidian:\n${searchResults.join("\n")}` : "Nenhum resultado encontrado.";
+        if (this.deps.webAgentService) {
+          const webRes = await this.deps.webAgentService.run({ query: action.query, preferredExecutor: "llm" }, observer);
+          actionResult = `Resultados da busca web:\n${webRes.text}`;
+        } else {
+          actionResult = "WebAgentService indisponível para busca.";
+        }
       } else if (action.type === "GENERATE_DIARY") {
         const today = new Date().toISOString().slice(0, 10);
         const entries = await this.deps.historyRepository.getMessagesByDate(message.chatId, today).catch(() => []);
@@ -198,7 +207,20 @@ export class Orchestrator {
     debugContext.ragUsed = compactMemories.length;
 
     // 5. Intent e Prompt
-    const classification = await this.deps.intentClassifier.detect(message.text);
+    // --- CLASSIFICAÇÃO DE INTENT (Prioridade: Regras > IA) ---
+    const ruleIntent = this.ruleClassifier.detect(message.text);
+    let classification;
+
+    if (ruleIntent && ruleIntent.confidence >= 0.8) {
+      classification = ruleIntent;
+      logger.info("intent_rule_override", {
+        chatId: message.chatId,
+        intent: classification.intent,
+        source: "rule_based"
+      });
+    } else {
+      classification = await this.deps.intentClassifier.detect(message.text);
+    }
     debugContext.intent = classification.intent;
     debugContext.confidence = classification.confidence;
     const systemPrompt = await this.deps.soulPromptService.buildSystemPrompt(classification.intent);
@@ -227,7 +249,58 @@ export class Orchestrator {
     debugContext.providerLatencyMs = executionResult.debug?.latencyMs ?? 0;
 
     // 7. Resposta e Failsafe
-    const finalText = sanitizeResponse(executionResult.replyText);
+    let finalText = sanitizeResponse(executionResult.replyText);
+
+    // 8. Execução de Tools geradas pelo LLM
+    if (executionResult.toolCalls && executionResult.toolCalls.length > 0) {
+      for (const call of executionResult.toolCalls) {
+        await observer?.report(`Executando ferramenta: ${call.tool}`);
+        const res = await this.toolExecutor.execute(call, message.chatId);
+        finalText += `\n\n⚙️ Resultado de ${call.tool}:\n${res}`;
+      }
+    }
+
+    // 9. Actions suggested by the LLM via execution flags
+    if (executionResult.shouldCreateNote && executionResult.noteTitle && executionResult.noteContent) {
+      try {
+        const note = await this.deps.obsidianService.createNote({
+          title: executionResult.noteTitle,
+          content: executionResult.noteContent
+        });
+        finalText += `\n\n💾 Nota criada: ${note.filePath}`;
+      } catch (error) {
+        finalText += `\n\n⚠️ Falha ao criar nota: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+
+    if (executionResult.shouldPersistMemory && executionResult.memoryText) {
+      if (this.deps.obsidianWriterService) {
+        try {
+          const saved = await this.deps.obsidianWriterService.saveMemoryToObsidian({
+            chatId: message.chatId,
+            content: executionResult.memoryText,
+            source: "llm"
+          });
+          finalText += `\n\n💾 Memória salva: ${saved.filePath}`;
+        } catch (error) {
+          finalText += `\n\n⚠️ Falha ao salvar memória no Obsidian: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+
+      try {
+        const ragSaved = await this.deps.ragService.saveMemory({
+          text: executionResult.memoryText,
+          source: "chat",
+          chatId: message.chatId
+        });
+        if (ragSaved) {
+          finalText += `\n\n💾 Memória também registrada no RAG: ${ragSaved.id}`;
+        }
+      } catch (error) {
+        finalText += `\n\n⚠️ Falha ao salvar memória no RAG: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }
+
     const assistantMessage: ConversationMessage = {
       id: generateId("assistant"), chatId: message.chatId, role: "assistant", content: finalText,
       timestamp: new Date().toISOString(), intent: classification.intent

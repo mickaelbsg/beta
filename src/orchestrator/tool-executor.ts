@@ -3,11 +3,13 @@ import { promisify } from "node:util";
 import type { ToolCall } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
 import { ObsidianWriterService } from "../obsidian-service/obsidian-writer-service.js";
+import type { WebAgentService } from "../web-search/web-agent-service.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface ToolExecutorDeps {
   obsidianWriterService?: ObsidianWriterService;
+  webAgentService?: WebAgentService;
 }
 
 export class ToolExecutor {
@@ -25,7 +27,7 @@ export class ToolExecutor {
         return await this.handleSaveMemory(input, chatId);
       }
       if (tool === "web_search") {
-        return "Busca web não disponível via tool-call direta neste modo.";
+        return await this.handleWebSearch(input, chatId);
       }
 
       return `Ferramenta desconhecida: ${tool}`;
@@ -72,4 +74,25 @@ export class ToolExecutor {
 
     return `Memória salva com sucesso em: ${result.filePath}`;
   }
+
+  private async handleWebSearch(input: Record<string, unknown>, chatId: string): Promise<string> {
+    const query = String(input.query || input.search_query || input.text || "");
+    if (!query) return "Erro: query de busca vazia.";
+
+    if (!this.deps.webAgentService) {
+      return "Erro: WebAgentService não disponível.";
+    }
+
+    try {
+      const result = await this.deps.webAgentService.run({
+        query,
+        preferredExecutor: "llm"
+      });
+      return result.text;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return `Erro na busca web: ${message}`;
+    }
+  }
 }
+

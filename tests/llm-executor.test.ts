@@ -13,6 +13,10 @@ class FakeProvider implements LLMProvider {
     private readonly shouldThrow = false
   ) {}
 
+  public isConfigured(): boolean {
+    return true;
+  }
+
   public async generateResponse(_input: {
     request: ExecutionRequest;
     prompt: string;
@@ -106,7 +110,7 @@ describe("LlmExecutor provider routing", () => {
     expect(primary.lastPrompt).toContain("### AVAILABLE TOOLS");
     expect(primary.lastPrompt).toContain("web_search");
     expect(primary.lastPrompt).toContain("SEARCH POLICY:");
-    expect(primary.lastPrompt).toContain("Never claim you cannot access the web.");
+    expect(primary.lastPrompt).toContain("Never claim that you cannot access the web.");
   });
 
   it("falls back to secondary model on same provider before provider fallback", async () => {

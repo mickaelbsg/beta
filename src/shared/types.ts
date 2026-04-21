@@ -1,4 +1,4 @@
-export type Intent = "NOTE" | "QUERY" | "STUDY" | "SEARCH" | "CHAT";
+export type Intent = "NOTE" | "QUERY" | "STUDY" | "SEARCH" | "CHAT" | "COMMAND";
 
 export type MessageRole = "user" | "assistant" | "system";
 

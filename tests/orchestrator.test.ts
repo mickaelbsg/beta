@@ -23,6 +23,7 @@ import { ToolAwarenessService } from "../src/tools/tool-awareness-service.js";
 import { DebugModeService } from "../src/debug/debug-mode-service.js";
 import { SelfOptimizationService } from "../src/optimization/self-optimization-service.js";
 import { UserProfileService } from "../src/optimization/user-profile-service.js";
+import { ConversationMemoryService } from "../src/orchestrator/conversation-memory-service.js";
 
 class InMemoryHistoryRepository implements HistoryRepository {
   public messages: ConversationMessage[] = [];
@@ -163,7 +164,8 @@ describe("Orchestrator", () => {
     const history = new InMemoryHistoryRepository();
     const executor = new FakeExecutor({
       replyText: "Nota criada.",
-      shouldPersistMemory: false,
+      shouldPersistMemory: true,
+      memoryText: "Preciso revisar SQL",
       shouldCreateNote: true,
       noteTitle: "Minha nota",
       noteContent: "Conteudo importante"
@@ -192,7 +194,8 @@ describe("Orchestrator", () => {
       toolAwarenessService: new FakeToolAwarenessService() as unknown as ToolAwarenessService,
       debugModeService: new FakeDebugModeService() as unknown as DebugModeService,
       selfOptimizationService: new FakeSelfOptimizationService() as unknown as SelfOptimizationService,
-      userProfileService: new FakeUserProfileService() as unknown as UserProfileService
+      userProfileService: new FakeUserProfileService() as unknown as UserProfileService,
+      conversationMemoryService: new ConversationMemoryService()
     });
 
     const result = await orchestrator.handleMessage({
@@ -241,7 +244,8 @@ describe("Orchestrator", () => {
       toolAwarenessService: new FakeToolAwarenessService() as unknown as ToolAwarenessService,
       debugModeService: new FakeDebugModeService() as unknown as DebugModeService,
       selfOptimizationService: new FakeSelfOptimizationService() as unknown as SelfOptimizationService,
-      userProfileService: new FakeUserProfileService() as unknown as UserProfileService
+      userProfileService: new FakeUserProfileService() as unknown as UserProfileService,
+      conversationMemoryService: new ConversationMemoryService()
     });
 
     await orchestrator.handleMessage({
@@ -286,7 +290,8 @@ describe("Orchestrator", () => {
       toolAwarenessService: new FakeToolAwarenessService() as unknown as ToolAwarenessService,
       debugModeService: new FakeDebugModeService(true) as unknown as DebugModeService,
       selfOptimizationService: new FakeSelfOptimizationService() as unknown as SelfOptimizationService,
-      userProfileService: new FakeUserProfileService() as unknown as UserProfileService
+      userProfileService: new FakeUserProfileService() as unknown as UserProfileService,
+      conversationMemoryService: new ConversationMemoryService()
     });
 
     const result = await orchestrator.handleMessage({

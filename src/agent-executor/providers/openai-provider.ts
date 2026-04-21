@@ -51,6 +51,7 @@ export class OpenAIProvider implements LLMProvider {
     if (!parsed || !parsed.replyText) {
       return {
         replyText: raw || "Nao consegui gerar resposta confiavel agora.",
+        toolCalls: [],
         shouldPersistMemory: false,
         shouldCreateNote: false
       };
@@ -58,6 +59,7 @@ export class OpenAIProvider implements LLMProvider {
 
     return {
       replyText: parsed.replyText,
+      toolCalls: parsed.toolCalls,
       shouldPersistMemory: Boolean(parsed.shouldPersistMemory),
       memoryText: parsed.memoryText,
       shouldCreateNote: Boolean(parsed.shouldCreateNote),
