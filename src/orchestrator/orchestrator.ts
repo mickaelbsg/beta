@@ -135,6 +135,13 @@ export class Orchestrator {
   private readonly ruleClassifier = new RuleBasedIntentClassifier();
 
   public constructor(private readonly deps: OrchestratorDeps) {
+    if (!deps.obsidianService) {
+      throw new Error("Orchestrator requires obsidianService");
+    }
+    if (!deps.toolAwarenessService) {
+      throw new Error("Orchestrator requires toolAwarenessService");
+    }
+
     this.toolExecutor = new ToolExecutor({
       obsidianWriterService: deps.obsidianWriterService,
       webAgentService: deps.webAgentService
@@ -164,6 +171,11 @@ export class Orchestrator {
     const action = decideAction(message.text);
     let actionResult = "";
     if (action.type !== "NONE") {
+      logger.info("orchestrator_action_detected", {
+        chatId: message.chatId,
+        action: action.type,
+        payload: action.type === "RUN_COMMAND" ? action.command : action.type === "SEARCH" ? action.query : ("content" in action ? action.content : null)
+      });
       await observer?.report(`Agindo: ${action.type}`);
       if (action.type === "SAVE_MEMORY") {
         const res = await this.deps.obsidianWriterService?.saveMemoryToObsidian({ chatId: message.chatId, content: action.content, source: "telegram" });
@@ -221,6 +233,13 @@ export class Orchestrator {
     } else {
       classification = await this.deps.intentClassifier.detect(message.text);
     }
+    logger.info("intent_classified", {
+      chatId: message.chatId,
+      text: message.text,
+      intent: classification.intent,
+      confidence: classification.confidence,
+      source: classification.source
+    });
     debugContext.intent = classification.intent;
     debugContext.confidence = classification.confidence;
     const systemPrompt = await this.deps.soulPromptService.buildSystemPrompt(classification.intent);
@@ -309,6 +328,6 @@ export class Orchestrator {
     this.deps.conversationMemoryService.addMessage(message.chatId, { role: "assistant", content: finalText, timestamp: Date.now() });
 
     if (debugEnabled) return { text: `${finalText}\n\n${formatDebugModeBlock(debugContext)}` };
-    return { text: (action.type !== "NONE" && !finalText.includes("💾")) ? `${finalText}\n\n${formatMemorySavedFeedback("", "")}` : finalText };
+    return { text: finalText };
   }
 }

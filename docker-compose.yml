@@ -1,8 +1,38 @@
 version: "3.9"
+
 services:
+  backend:
+    build: .
+    container_name: beta-backend
+    user: "1000:1000"
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - NODE_ENV=production
+      - QDRANT_URL=http://qdrant:6333
+      - OBSIDIAN_VAULT_PATH=/app/vault
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - /home/pc/projetos/obsidian/07-memoria-beta:/app/vault
+    depends_on:
+      - qdrant
+
+  dashboard:
+    build: ./admin-ui
+    container_name: beta-dashboard
+    restart: unless-stopped
+    ports:
+      - "8081:80"
+    depends_on:
+      - backend
+
   qdrant:
-    image: qdrant/qdrant:v1.13.4
-    container_name: personal-assistant-qdrant
+    image: qdrant/qdrant:latest
+    container_name: beta-qdrant
+    restart: unless-stopped
     ports:
       - "6333:6333"
       - "6334:6334"

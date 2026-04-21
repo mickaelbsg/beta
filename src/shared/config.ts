@@ -119,7 +119,13 @@ const schema = z.object({
         .map((item) => item.trim())
         .filter(Boolean)
     )
-    .pipe(z.array(z.string()))
+    .pipe(z.array(z.string())),
+  ADMIN_SERVER_PORT: z
+    .string()
+    .default("3001")
+    .transform((value) => Number(value))
+    .pipe(z.number().int().min(1024).max(65535)),
+  ADMIN_API_PASSWORD: z.string().min(8).default("beta-admin-secret-123")
 });
 
 export type AppConfig = z.infer<typeof schema>;

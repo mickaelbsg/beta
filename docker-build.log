@@ -1,0 +1,110 @@
+Creating network "beta_default" with the default driver
+Building backend
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  259.8MB
+Step 1/20 : FROM node:20-slim AS builder
+ ---> 6d1685dbd5a2
+Step 2/20 : WORKDIR /app
+ ---> Using cache
+ ---> d2a41586dfde
+Step 3/20 : RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 9e814e0c8017
+Step 4/20 : COPY package*.json ./
+ ---> Using cache
+ ---> 7027e7b1464f
+Step 5/20 : RUN npm install
+ ---> Using cache
+ ---> 20e0edd293e9
+Step 6/20 : COPY . .
+ ---> 2f67d071b6c2
+Step 7/20 : RUN npm run build
+ ---> Running in fba119da29bb
+
+> personal-ai-assistant-backend@0.2.0 build
+> tsc -p tsconfig.json
+
+ ---> Removed intermediate container fba119da29bb
+ ---> 13e54683e8e6
+Step 8/20 : FROM node:20-slim
+ ---> 6d1685dbd5a2
+Step 9/20 : WORKDIR /app
+ ---> Using cache
+ ---> d2a41586dfde
+Step 10/20 : RUN apt-get update && apt-get install -y     libgbm-dev     libnss3     libasound2     libxshmfence1     libatk1.0-0     libatk-bridge2.0-0     libcups2     libdrm2     libxkbcommon0     libxcomposite1     libxdamage1     libxrandr2     libpango-1.0-0     libcairo2     python3     make     g++     && rm -rf /var/lib/apt/lists/*
+ ---> Using cache
+ ---> 43bdab59b5f8
+Step 11/20 : COPY package*.json ./
+ ---> Using cache
+ ---> ab4a4ba1ec03
+Step 12/20 : RUN npm install --omit=dev && npm rebuild better-sqlite3
+ ---> Using cache
+ ---> bf45ea217361
+Step 13/20 : COPY --from=builder /app/dist ./dist
+ ---> Using cache
+ ---> 15178bc6ea66
+Step 14/20 : COPY --from=builder /app/soul.md ./soul.md
+ ---> Using cache
+ ---> d6a005f90e05
+Step 15/20 : COPY --from=builder /app/tools-contract-spec.md ./tools-contract-spec.md
+ ---> Using cache
+ ---> d4021ff77c73
+Step 16/20 : COPY --from=builder /app/tools ./tools
+ ---> Using cache
+ ---> 110cb832a183
+Step 17/20 : RUN mkdir -p data logs vault && chown -R 1000:1000 /app
+ ---> Using cache
+ ---> c9a60d71c4f1
+Step 18/20 : USER 1000
+ ---> Using cache
+ ---> 8395cabf8731
+Step 19/20 : EXPOSE 3001
+ ---> Using cache
+ ---> 1f714c2a138b
+Step 20/20 : CMD ["npm", "start"]
+ ---> Using cache
+ ---> 54f787125f65
+Successfully built 54f787125f65
+Successfully tagged beta_backend:latest
+Building dashboard
+DEPRECATED: The legacy builder is deprecated and will be removed in a future release.
+            Install the buildx component to build images with BuildKit:
+            https://docs.docker.com/go/buildx/
+
+Sending build context to Docker daemon  119.8MB
+Step 1/12 : FROM node:20-slim AS builder
+ ---> 6d1685dbd5a2
+Step 2/12 : WORKDIR /app
+ ---> Using cache
+ ---> d2a41586dfde
+Step 3/12 : COPY package*.json ./
+ ---> Using cache
+ ---> d3235d0f925b
+Step 4/12 : RUN npm install
+ ---> Using cache
+ ---> cff3e2e057b4
+Step 5/12 : COPY . .
+ ---> 94ec6ab5d846
+Step 6/12 : RUN npm run build
+ ---> Running in d46c1753cf78
+
+> admin-ui@0.0.0 build
+> tsc -b && vite build
+
+vite v5.4.21 building for production...
+transforming...
+✓ 3 modules transformed.
+[91mx Build failed in 492ms
+[0m[91merror during build:
+[vite:css] [postcss] It looks like you're trying to use `tailwindcss` directly as a PostCSS plugin. The PostCSS plugin has moved to a separate package, so to continue using Tailwind CSS with PostCSS you'll need to install `@tailwindcss/postcss` and update your PostCSS configuration.
+file: /app/src/index.css:undefined:NaN
+    at ft (/app/node_modules/tailwindcss/dist/lib.js:38:1643)
+    at LazyResult.runOnRoot (/app/node_modules/postcss/lib/lazy-result.js:361:16)
+    at LazyResult.runAsync (/app/node_modules/postcss/lib/lazy-result.js:290:26)
+    at LazyResult.async (/app/node_modules/postcss/lib/lazy-result.js:192:30)
+    at LazyResult.then (/app/node_modules/postcss/lib/lazy-result.js:436:17)
+[0mThe command '/bin/sh -c npm run build' returned a non-zero code: 1
+Service 'dashboard' failed to build : Build failed

@@ -1,6 +1,6 @@
-# BETA — Seu Copiloto Técnico (Telegram + Obsidian)
+# BETA — Seu Copiloto Técnico (Telegram + Obsidian + Admin UI)
 
-O BETA é um assistente pessoal projetado para ser seu terminal remoto seguro e seu "segundo cérebro" persistente. Ele opera via Telegram, armazena conhecimento no seu Obsidian e aprende com o histórico das suas interações.
+O BETA é um assistente pessoal projetado para ser seu terminal remoto seguro, seu "segundo cérebro" persistente e agora com um painel de administração moderno. Ele opera via Telegram, armazena conhecimento no seu Obsidian, tem um dashboard de monitoramento e aprende com o histórico das suas interações.
 
 ---
 
@@ -8,7 +8,19 @@ O BETA é um assistente pessoal projetado para ser seu terminal remoto seguro e 
 
 1. **Sem Autonomia Espontânea:** A IA não executa nada por conta própria. Toda ação é disparada por comando ou intenção clara.
 2. **Controle Total:** O usuário comanda, o sistema executa, a IA assiste e explica.
-3. **Guardrails Determinísticos:** Comandos operacionais são validados por uma camada de código (Action Layer) antes de qualquer processamento da IA.
+3. **Guardrails Determinísticos:** Comandos operacionais são validados por uma camada de código (Action Layer) antes de processamento da IA.
+4. **Isolamento de Contêineres:** Todo o sistema, incluindo backend e dashboard, opera dentro de contêineres Docker isolados, minimizando acesso indevido à máquina hospedeira.
+
+---
+
+## 💻 Painel Administrativo (Admin UI)
+
+A partir da versão 0.3.0, o Beta inclui um dashboard visual construído em React, Vite e Tailwind CSS. 
+
+- **Monitoramento:** Acompanhamento do Uptime, Status do Servidor e da conexão com o Obsidian Vault.
+- **Logs em Tempo Real:** Tabela visual dos últimos eventos técnicos da Action Layer, com auditoria de falha/sucesso.
+- **Configurações Dinâmicas:** Gerenciamento visual das chaves de API, com suporte nativo de habilitar e desabilitar provedores e a ordem de roteamento (Fallback).
+- **Acessibilidade & UX:** Painel modular (Sidebar, Header) e modo responsivo.
 
 ---
 
@@ -50,44 +62,27 @@ O Obsidian é a **fonte única de verdade** do sistema. O BETA organiza seu conh
 
 ---
 
-## 🛠️ Guia de Uso Rápido
+## 🏗️ Configuração Técnica e Implantação (Docker)
 
-1. **Ensine o sistema sobre você:**
-   > Envie: "Meu nome é Alpha e trabalho com Engenharia de Dados"
-   > O sistema atualizará seu `profile.md` instantaneamente.
-
-2. **Execute com segurança:**
-   > Envie: "/run docker ps"
-   > O sistema executa o comando e a IA explica o status dos seus serviços.
-
-3. **Recupere conhecimento:**
-   > Envie: "Busque na web sobre os novos recursos do Python 3.13"
-   > O braço **WEB** será acionado para trazer informações atualizadas.
-
----
-
-## 🏗️ Configuração Técnica
+O sistema agora é totalmente nativo para Docker.
 
 ### Requisitos
+- Docker Engine & Docker Compose
+- Vault do Obsidian configurado para montagem no volume do contêiner.
+- Arquivo `.env` configurado.
 
-- Node.js 20+
-- Vault do Obsidian local configurado em `OBSIDIAN_VAULT_PATH`.
-- Chaves de API (OmniRoute ou OpenAI) no `.env`.
+### Subindo o ecossistema
 
-### Instalação
-
-```bash
-npm install
-npm run build
-npm run dev
-```
-
-### CLI Interno
+O comando único para construir as imagens (Backend Node.js e Admin UI Nginx) e subir o sistema de bancos (Qdrant):
 
 ```bash
-npm run cli -- note "Minha nota técnica"
-npm run cli -- search "Kubernetes"
+docker-compose up -d --build
 ```
+
+### Acesso aos Serviços
+- **Telegram Bot:** Rodando silenciosamente em background.
+- **Backend API:** Internamente porta `3001` (Exposto via porta configurada no docker-compose).
+- **Admin UI Dashboard:** Porta `8080` (Acesse `http://localhost:8080`).
 
 ---
 *BETA — O motorista do seu ecossistema técnico.*

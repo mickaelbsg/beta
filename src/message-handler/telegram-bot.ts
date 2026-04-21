@@ -38,6 +38,26 @@ function shouldReportStatus(step: string, debugEnabled: boolean): boolean {
   return importantSignals.some((signal) => normalized.includes(signal));
 }
 
+const TELEGRAM_MAX_LENGTH = 4096;
+
+function splitMessage(text: string): string[] {
+  if (text.length <= TELEGRAM_MAX_LENGTH) return [text];
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    if (remaining.length <= TELEGRAM_MAX_LENGTH) {
+      chunks.push(remaining);
+      break;
+    }
+    let splitAt = remaining.lastIndexOf("\n", TELEGRAM_MAX_LENGTH);
+    if (splitAt <= 0) splitAt = remaining.lastIndexOf(" ", TELEGRAM_MAX_LENGTH);
+    if (splitAt <= 0) splitAt = TELEGRAM_MAX_LENGTH;
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  return chunks;
+}
+
 export class TelegramMessageHandler {
   private readonly bot: TelegramBot;
   private readonly processedMessageIds = new Set<string>();
@@ -115,10 +135,14 @@ export class TelegramMessageHandler {
       };
 
       try {
+        await this.bot.sendChatAction(msg.chat.id, "typing");
         // BETA v0.2.1: Todo input de texto passa pelo Orchestrator para garantir Action Layer determinística.
         // O CommandRouter ainda pode ser usado para comandos que NÃO requerem IA, mas por padrão, o Orquestrador manda.
         const response = await this.args.orchestrator.handleMessage(inbound, observer);
-        await this.bot.sendMessage(msg.chat.id, response.text);
+        const chunks = splitMessage(response.text);
+        for (const chunk of chunks) {
+          await this.bot.sendMessage(msg.chat.id, chunk);
+        }
 
         if (!this.args.commandRouter.isCommand(text)) {
           try {

@@ -86,3 +86,13 @@
 - **Bug:** Comandos como `/diary` e `/note` rodavam por caminhos paralelos, às vezes ignorando a Action Layer determinística ou a lógica de contexto da IA.
 - **Causa:** Duplicidade de lógica entre `CommandHandlers` e `ActionDecider`.
 - **Solução:** Unificação total do fluxo no `Orchestrator`. Agora, 100% dos inputs (chat ou comando `/`) passam primeiro pelo `ActionDecider` (Corpo) para execução física e depois pelo LLM (Voz) para explicação contextualizada.
+
+### 14. Monolito Frontend (Admin UI) sem Escalabilidade
+- **Bug:** Todo o painel de administração (`App.tsx`) estava em um único arquivo de 300+ linhas, misturando visualizações, estado e chamadas de rede.
+- **Causa:** Protótipo inicial para testar endpoints do backend via interface visual.
+- **Solução:** Aplicada a skill `frontend-ui-ux-specialist`. Refatoração para Componentes (`Sidebar`, `DashboardView`, `ConfigView`) e abstração das chamadas de API para `lib/api.ts`. Melhoria de UI/UX com adoção padronizada do Tailwind e Glassmorphism.
+
+### 15. Execução Mista (Local vs Container)
+- **Bug:** Conflitos ao rodar partes da aplicação localmente (`npm run dev`) e o Qdrant via Docker, dificultando o deploy unificado.
+- **Causa:** Falta de um Dockerfile para o Admin-UI e mapeamento de rotas incorreto.
+- **Solução:** Implantação total no ecossistema Docker. Criação de Nginx para servir o Admin-UI buildado e padronização do `docker-compose up -d --build` como comando definitivo de subida do projeto.

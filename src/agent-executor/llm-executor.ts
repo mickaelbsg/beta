@@ -2,72 +2,74 @@ import type { ExecutionRequest, ExecutionResult, Executor } from "../shared/type
 import { logger } from "../shared/logger.js";
 import { PromptBuilder } from "./prompt-builder.js";
 import type { LLMProvider } from "./providers/llm-provider.js";
+import { OpenAIProvider } from "./providers/openai-provider.js";
+import { OmniRouteProvider } from "./providers/omniroute-provider.js";
+import { DynamicConfigService } from "../config/dynamic-config-service.js";
 
 import { detectActionIntent } from "./action-intent-detector.js";
 
-interface LlmExecutorArgs {
-  model: string;
-  fallbackModel?: string;
-  primaryProvider: LLMProvider;
-  fallbackProvider?: LLMProvider;
-}
-
 export class LlmExecutor implements Executor {
-  private readonly model: string;
-  private readonly fallbackModel?: string;
-  private readonly primaryProvider: LLMProvider;
-  private readonly fallbackProvider?: LLMProvider;
   private readonly promptBuilder = new PromptBuilder();
+  private providersCache: Map<string, LLMProvider> = new Map();
 
-  public constructor(args: LlmExecutorArgs) {
-    this.model = args.model;
-    this.fallbackModel = args.fallbackModel?.trim() || undefined;
-    this.primaryProvider = args.primaryProvider;
-    this.fallbackProvider = args.fallbackProvider;
+  public constructor(private readonly configService: DynamicConfigService) {
+    // Limpa cache se a config mudar
+    this.configService.onChange(() => {
+      this.providersCache.clear();
+      logger.info("llm_executor_cache_invalidated", { reason: "config_change" });
+    });
+  }
+
+  private getProvider(providerId: string): LLMProvider | undefined {
+    const cached = this.providersCache.get(providerId);
+    if (cached) return cached;
+
+    const config = this.configService.getConfig();
+    const providerConfig = config.providers.find(p => p.id === providerId);
+    if (!providerConfig || !providerConfig.enabled) return undefined;
+
+    let provider: LLMProvider;
+    if (providerConfig.type === "openai") {
+      provider = new OpenAIProvider(providerConfig.apiKey);
+    } else if (providerConfig.type === "omniroute") {
+      provider = new OmniRouteProvider(providerConfig.baseUrl || "http://localhost:20128/v1", providerConfig.apiKey);
+    } else {
+      return undefined;
+    }
+
+    this.providersCache.set(providerId, provider);
+    return provider;
   }
 
   public async execute(request: ExecutionRequest): Promise<ExecutionResult> {
+    const config = this.configService.getConfig();
+    const sortedModels = [...config.models].sort((a, b) => a.priority - b.priority);
+
     const prompt = this.promptBuilder.build(request);
     logger.info("llm_prompt_built", {
       module: "LlmExecutor",
       action: "execute",
-      model: this.model,
       inputPreview: request.userMessage.slice(0, 120),
       promptLength: prompt.length,
       error: null
     });
+
     const candidates: Array<{ provider: LLMProvider; model: string; isFallback: boolean }> = [];
 
-    if (this.primaryProvider.isConfigured()) {
-      candidates.push({ provider: this.primaryProvider, model: this.model, isFallback: false });
-    }
-
-    if (this.fallbackModel && this.fallbackModel !== this.model && this.primaryProvider.isConfigured()) {
-      candidates.push({
-        provider: this.primaryProvider,
-        model: this.fallbackModel,
-        isFallback: true
-      });
-    }
-
-    if (this.fallbackProvider && this.fallbackProvider.name !== this.primaryProvider.name && this.fallbackProvider.isConfigured()) {
-      candidates.push({
-        provider: this.fallbackProvider,
-        model: this.model,
-        isFallback: true
-      });
-      if (this.fallbackModel && this.fallbackModel !== this.model) {
+    for (const modelConfig of sortedModels) {
+      const provider = this.getProvider(modelConfig.providerId);
+      if (provider && provider.isConfigured()) {
         candidates.push({
-          provider: this.fallbackProvider,
-          model: this.fallbackModel,
-          isFallback: true
+          provider,
+          model: modelConfig.name,
+          isFallback: modelConfig.isFallback
         });
       }
     }
 
     if (candidates.length === 0) {
       return {
-        replyText: "Nenhum provedor de IA configurado corretamente no sistema. Verifique suas chaves de API.",
+        replyText: "Nenhum provedor de IA configurado ou habilitado corretamente no sistema Dashboard.",
         shouldPersistMemory: false,
         shouldCreateNote: false
       };
@@ -82,28 +84,7 @@ export class LlmExecutor implements Executor {
           model: candidate.model
         });
 
-        // --- ENFORCEMENT DE TOOL USE ---
-        const intent = detectActionIntent(result.replyText);
-        const missingTool = intent.hasIntent && (!result.toolCalls || result.toolCalls.length === 0);
-
-        if (missingTool) {
-          logger.warn("tool_enforcement_triggered", {
-            module: "LlmExecutor",
-            action: "execute",
-            intentType: intent.type,
-            textPreview: result.replyText.slice(0, 100)
-          });
-
-          // Retry único com instrução de choque
-          result = await candidate.provider.generateResponse({
-            request: {
-              ...request,
-              userMessage: `${request.userMessage}\n\n[ERRO DE EXECUÇÃO]: Você disse que iria agir mas não usou ferramentas. NÃO descreva ações em texto. Use o campo 'toolCalls' agora para executar o que prometeu.`
-            },
-            prompt,
-            model: candidate.model
-          });
-        }
+        /* --- ENFORCEMENT DE TOOL USE DESATIVADO TEMPORARIAMENTE --- */
 
         const candidateContext = {
           module: "LlmExecutor",
@@ -114,10 +95,10 @@ export class LlmExecutor implements Executor {
           latencyMs: Date.now() - startedAt,
           error: null
         };
+
         if (candidate.isFallback) {
           logger.warn("provider_used", {
-            ...candidateContext,
-            fallback_from: `${this.primaryProvider.name}:${this.model}`
+            ...candidateContext
           });
         } else {
           logger.info("provider_used", candidateContext);
@@ -145,10 +126,9 @@ export class LlmExecutor implements Executor {
     }
 
     return {
-      replyText: "Falha temporaria no modelo. Pode repetir em uma frase curta?",
+      replyText: "Falha temporaria em todos os modelos configurados no Dashboard. Pode repetir em uma frase curta?",
       shouldPersistMemory: false,
       shouldCreateNote: false
     };
   }
-
 }

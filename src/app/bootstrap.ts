@@ -36,6 +36,8 @@ import { FeedbackService } from "../optimization/feedback-service.js";
 import { UserProfileService } from "../optimization/user-profile-service.js";
 import { FileSystemService } from "../filesystem/filesystem-service.js";
 import { ShellSessionService } from "../shell/shell-session-service.js";
+import { DynamicConfigService } from "../config/dynamic-config-service.js";
+import { AdminApiServer } from "../api/admin-server.js";
 import { spawnSync } from "node:child_process";
 
 async function buildMemoryRepository(
@@ -68,6 +70,8 @@ async function main(): Promise<void> {
 
   const historyRepository = new SqliteHistoryRepository(cfg.SQLITE_DB_PATH);
   await historyRepository.init();
+  const dynamicConfigService = new DynamicConfigService(cfg.RUNTIME_CONFIG_PATH.replace("runtime-config.json", "dynamic-config.json"));
+  await dynamicConfigService.init();
   const runtimeConfigService = new RuntimeConfigService(cfg.RUNTIME_CONFIG_PATH);
   await runtimeConfigService.init();
   const agentLogService = new AgentLogService(cfg.AGENT_LOG_PATH);
@@ -144,16 +148,7 @@ async function main(): Promise<void> {
   const obsidianService = new ObsidianService(cfg.OBSIDIAN_VAULT_PATH);
   await obsidianService.init();
 
-  const openAIProvider = new OpenAIProvider(cfg.OPENAI_API_KEY);
-  const omniRouteProvider = new OmniRouteProvider(cfg.OMNIROUTE_BASE_URL, cfg.OMNIROUTE_API_KEY);
-  const primaryProvider = cfg.LLM_PROVIDER === "omniroute" ? omniRouteProvider : openAIProvider;
-  const fallbackProvider = cfg.LLM_PROVIDER === "omniroute" ? openAIProvider : omniRouteProvider;
-  const llmExecutor = new LlmExecutor({
-    model: cfg.OPENAI_MODEL,
-    fallbackModel: cfg.OPENAI_FALLBACK_MODEL,
-    primaryProvider,
-    fallbackProvider
-  });
+  const llmExecutor = new LlmExecutor(dynamicConfigService);
   const openCodeExecutor: Executor | undefined =
     cfg.EXECUTOR_MODE === "opencode"
       ? (() => {
@@ -249,6 +244,16 @@ async function main(): Promise<void> {
     debugModeService
   });
   telegram.start();
+
+  const adminServer = new AdminApiServer({
+    port: cfg.ADMIN_SERVER_PORT,
+    adminToken: cfg.ADMIN_API_PASSWORD,
+    dynamicConfigService,
+    agentLogService,
+    historyRepository,
+    obsidianService
+  });
+  adminServer.start();
 }
 
 main().catch((error: unknown) => {
