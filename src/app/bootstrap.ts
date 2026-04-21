@@ -5,7 +5,9 @@ import { QdrantMemoryRepository } from "../memory-service/qdrant-memory-reposito
 import { NullMemoryRepository } from "../memory-service/null-memory-repository.js";
 import { EmbeddingService } from "../rag-service/embedding-service.js";
 import { RagService } from "../rag-service/rag-service.js";
+import { ConversationMemoryService } from "../orchestrator/conversation-memory-service.js";
 import { ObsidianService } from "../obsidian-service/obsidian-service.js";
+import { ObsidianWriterService } from "../obsidian-service/obsidian-writer-service.js";
 import { LlmExecutor } from "../agent-executor/llm-executor.js";
 import { OpenCodeExecutor } from "../agent-executor/opencode-executor.js";
 import { OmniRouteProvider } from "../agent-executor/providers/omniroute-provider.js";
@@ -100,6 +102,7 @@ async function main(): Promise<void> {
   const soulPromptService = new SoulPromptService(cfg.SOUL_PROMPT_PATH);
   const executionInsightsStore = new ExecutionInsightsStore();
   const pendingMemoryConfirmationService = new PendingMemoryConfirmationService();
+  const conversationMemoryService = new ConversationMemoryService();
   const debugModeService = new DebugModeService(cfg.DEBUG_MODE_STORE_PATH);
   await debugModeService.init();
   const toolAwarenessService = new ToolAwarenessService({
@@ -195,10 +198,13 @@ async function main(): Promise<void> {
     cfg.INTENT_LLM_FALLBACK_THRESHOLD
   );
 
+  const obsidianWriterService = new ObsidianWriterService(obsidianService);
+
   const orchestrator = new Orchestrator({
     historyRepository,
     ragService,
     obsidianService,
+    obsidianWriterService,
     intentClassifier,
     executorRouter,
     webSearchService: webSearch,
@@ -212,7 +218,8 @@ async function main(): Promise<void> {
     toolAwarenessService,
     debugModeService,
     selfOptimizationService,
-    userProfileService
+    userProfileService,
+    conversationMemoryService
   });
 
   const commandRouter = new CommandRouter({

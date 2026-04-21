@@ -4,6 +4,7 @@ import type {
   InteractionObserver,
   SearchResult
 } from "../shared/types.js";
+import { ClaudeCliClient } from "../agent-executor/claude-cli-client.js";
 import { RagService } from "../rag-service/rag-service.js";
 import { ObsidianService } from "../obsidian-service/obsidian-service.js";
 import { ExecutorRouter } from "../orchestrator/executor-router.js";
@@ -81,15 +82,20 @@ export class CommandHandlers {
     const title = text.slice(0, 60);
     const note = await this.deps.obsidianService.createNote({
       title,
-      content: text
+      content: text,
+      type: "knowledge",
+      tags: ["auto"],
+      metadata: { source: "telegram" }
     });
-    await observer?.report("Salvando conteudo da nota na memoria");
+    await observer?.report("Indexando nota no RAG");
     const memory = await this.deps.ragService.saveMemory({
       text,
       source: "obsidian",
       metadata: {
         notePath: note.filePath,
-        memoryType: "note"
+        memoryType: "note",
+        memoryScore: 1,
+        source: "telegram"
       }
     });
     const memoryId = String(memory?.metadata?.shortId ?? "n/a");
@@ -178,27 +184,132 @@ export class CommandHandlers {
     return `Configuracao atualizada: ${key}=${value}`;
   }
 
+  public async ask(question: string, observer?: InteractionObserver): Promise<string> {
+    if (!question) {
+      return "Uso: /ask <pergunta>";
+    }
+    await observer?.report("Perguntando ao Claude Code CLI");
+    const svc = new ClaudeCliClient();
+    const response = await svc.run({
+      context: "Responda apenas com uma explicacao ou solucao. Nao execute nada.",
+      instruction: question,
+      tools: []
+    });
+    return response.text;
+  }
+
+  public async build(description: string, observer?: InteractionObserver): Promise<string> {
+    if (!description) {
+      return "Uso: /build <descricao>";
+    }
+    await observer?.report("Gerando codigo via Claude Code CLI");
+    const svc = new ClaudeCliClient();
+    const response = await svc.run({
+      context: "Gere codigo ou script mas nao execute nada. Forneca apenas o resultado.",
+      instruction: description,
+      tools: []
+    });
+    return response.text;
+  }
+
+  public async run(command: string, context?: CommandContext, observer?: InteractionObserver): Promise<string> {
+    if (!context?.chatId) {
+      return "Nao foi possivel identificar o chat para executar o comando.";
+    }
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return "Uso: /run <comando>";
+    }
+
+    if (trimmed.includes("&&") || trimmed.includes("|") || trimmed.includes(";")) {
+      return "Comando bloqueado por seguranca.";
+    }
+
+    const parts = trimmed.split(/\s+/).filter(Boolean);
+    const [commandName, ...args] = parts;
+    const allowedCommands = ["docker", "pm2", "git", "ls", "cat"];
+    const prohibitedPatterns = ["rm", "shutdown", "reboot", ":(){:|:&};:", "ddos"];
+    if (!commandName || !allowedCommands.includes(commandName)) {
+      return "Comando nao autorizado. Use apenas comandos seguros.";
+    }
+    if (args.some((arg) => prohibitedPatterns.some((pattern) => arg.toLowerCase().includes(pattern)))) {
+      return "Comando bloqueado por seguranca.";
+    }
+
+    await observer?.report("Executando comando local seguro");
+    try {
+      const { execFile } = await import("node:child_process");
+      const output = await new Promise<string>((resolve, reject) => {
+        execFile(commandName, args, { encoding: "utf-8", timeout: 120000 }, (error, stdout, stderr) => {
+          if (error) {
+            reject(new Error(stderr || error.message));
+            return;
+          }
+          resolve(String(stdout || ""));
+        });
+      });
+      return [`Output de /run:`, "", output].join("\n");
+    } catch (error) {
+      return `Erro ao executar comando: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+
+  public async diary(context?: CommandContext, observer?: InteractionObserver): Promise<string> {
+    if (!context?.chatId) {
+      return "Nao foi possivel identificar o chat para gerar o diario.";
+    }
+    await observer?.report("Gerando diario inteligente do dia");
+    const today = new Date().toISOString().slice(0, 10);
+    const title = today;
+    const entries = await this.deps.historyRepository.getMessagesByDate(context.chatId, today).catch(() => []);
+    const formatted = entries
+      .map((item) => `- [${item.timestamp}] [${item.role}] ${item.content}`)
+      .join("\n");
+
+    const content = [
+      "## Resumo do Dia",
+      formatted ? "Interacoes tecnicas realizadas no dia." : "Sem interacoes registradas hoje.",
+      "",
+      "## Aprendizados",
+      formatted ? "- Conversa e execucoes relevantes foram registradas." : "- Nenhum aprendizado registrado.",
+      "",
+      "## Problemas Encontrados",
+      formatted ? "- Verificar pontos de erro no historico acima." : "- Nenhum problema registrado.",
+      "",
+      "## Solucoes Aplicadas",
+      formatted ? "- Ajustes e respostas realizados conforme contexto do chat." : "- Nenhuma solucao aplicada.",
+      "",
+      "## Comandos Relevantes",
+      formatted || "- Nenhum comando relevante hoje.",
+      "",
+      "## Tags",
+      "#daily #beta #telegram"
+    ].join("\n");
+
+    const note = await this.deps.obsidianService.createOrUpdateNote(
+      {
+        title,
+        content,
+        type: "daily",
+        tags: ["daily", "beta", "telegram"],
+        metadata: { source: "telegram" }
+      },
+      true
+    );
+    return note.duplicated ? `Diario atualizado: ${note.filePath}` : `Diario criado: ${note.filePath}`;
+  }
+
   public async search(query: string, observer?: InteractionObserver): Promise<string> {
     if (!query) {
       return "Uso: /search <consulta>";
     }
-    await observer?.report("Executando busca na web");
-    const startedAt = Date.now();
-    let results: SearchResult[] = [];
-    try {
-      results = await this.deps.webSearchService.search(query);
-    } catch {
-      return "Busca web indisponivel no momento. Tente novamente em instantes.";
+    await observer?.report("Consultando memoria semantica");
+    const topK = this.deps.runtimeConfigService.getNumber("rag_top_k", 5);
+    const memories = await this.deps.ragService.retrieveRelevantMemories(query, Math.min(topK, 10));
+    if (!memories.length) {
+      return "Nenhuma memoria relevante encontrada.";
     }
-    this.deps.executionInsightsStore.record({
-      timestamp: new Date().toISOString(),
-      intent: "SEARCH",
-      memoriesUsed: 0,
-      memorySaved: false,
-      executor: "llm",
-      elapsedMs: Date.now() - startedAt
-    });
-    return ["Resultados de busca:", "", summarizeSearch(results)].join("\n");
+    return formatMemorySearch(memories);
   }
 
   public async study(topic: string, observer?: InteractionObserver): Promise<string> {

@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { QdrantClient } from "@qdrant/js-client-rest";
+import { logger } from "../shared/logger.js";
 import type { MemoryRecord, MemoryRepository } from "../shared/types.js";
 
 interface QdrantMemoryRepositoryArgs {
@@ -9,8 +10,12 @@ interface QdrantMemoryRepositoryArgs {
   vectorSize: number;
 }
 
+function normalizeText(input: string): string {
+  return input.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
 function hashText(input: string): string {
-  return crypto.createHash("sha256").update(input.trim()).digest("hex");
+  return crypto.createHash("sha256").update(normalizeText(input)).digest("hex");
 }
 
 function shortIdFrom(rawId: string): string {
@@ -28,86 +33,142 @@ export class QdrantMemoryRepository implements MemoryRepository {
   }
 
   public async init(): Promise<void> {
-    const collections = await this.client.getCollections();
-    const exists = collections.collections.some((c) => c.name === this.args.collectionName);
-    if (!exists) {
-      await this.client.createCollection(this.args.collectionName, {
-        vectors: {
-          size: this.args.vectorSize,
-          distance: "Cosine"
-        }
+    try {
+      const collections = await this.client.getCollections();
+      const exists = collections.collections.some((c) => c.name === this.args.collectionName);
+      if (!exists) {
+        await this.client.createCollection(this.args.collectionName, {
+          vectors: {
+            size: this.args.vectorSize,
+            distance: "Cosine"
+          }
+        });
+      }
+      logger.info("qdrant_collection_ready", {
+        module: "QdrantMemoryRepository",
+        action: "init",
+        collectionName: this.args.collectionName,
+        vectorSize: this.args.vectorSize,
+        error: null
       });
+    } catch (error) {
+      logger.error("qdrant_init_failed", {
+        module: "QdrantMemoryRepository",
+        action: "init",
+        collectionName: this.args.collectionName,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
   }
 
   public async saveMemory(
     record: Omit<MemoryRecord, "id"> & { id?: string; vector: number[] }
   ): Promise<MemoryRecord> {
-    const existing = await this.findNearDuplicate(record.text);
-    if (existing) {
-      return existing;
+    try {
+      const existing = await this.findNearDuplicate(record.text);
+      if (existing) {
+        logger.info("qdrant_memory_duplicate", {
+          module: "QdrantMemoryRepository",
+          action: "saveMemory",
+          textPreview: record.text.slice(0, 80),
+          duplicateId: existing.id,
+          error: null
+        });
+        return existing;
+      }
+
+      const id = record.id ?? crypto.randomUUID();
+      const payload = {
+        text: record.text,
+        source: record.source,
+        createdAt: record.timestamp,
+        contentHash: hashText(record.text),
+        shortId: String(record.metadata?.shortId ?? shortIdFrom(id)),
+        ...(record.metadata ?? {})
+      };
+
+      await this.client.upsert(this.args.collectionName, {
+        wait: true,
+        points: [
+          {
+            id,
+            vector: record.vector,
+            payload
+          }
+        ]
+      });
+
+      logger.info("qdrant_memory_saved", {
+        module: "QdrantMemoryRepository",
+        action: "saveMemory",
+        textPreview: record.text.slice(0, 80),
+        id,
+        shortId: payload.shortId,
+        error: null
+      });
+
+      return {
+        id,
+        text: record.text,
+        source: record.source,
+        timestamp: record.timestamp,
+        metadata: payload
+      };
+    } catch (error) {
+      logger.error("qdrant_save_failed", {
+        module: "QdrantMemoryRepository",
+        action: "saveMemory",
+        textPreview: record.text.slice(0, 80),
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
-
-    const id = record.id ?? crypto.randomUUID();
-    const payload = {
-      text: record.text,
-      source: record.source,
-      createdAt: record.timestamp,
-      contentHash: hashText(record.text),
-      shortId: String(record.metadata?.shortId ?? shortIdFrom(id)),
-      ...(record.metadata ?? {})
-    };
-
-    await this.client.upsert(this.args.collectionName, {
-      wait: true,
-      points: [
-        {
-          id,
-          vector: record.vector,
-          payload
-        }
-      ]
-    });
-
-    return {
-      id,
-      text: record.text,
-      source: record.source,
-      timestamp: record.timestamp,
-      metadata: payload
-    };
   }
 
   public async searchMemories(queryEmbedding: number[], topK: number): Promise<MemoryRecord[]> {
-    let results;
     try {
-      results = await this.client.search(this.args.collectionName, {
+      const results = await this.client.search(this.args.collectionName, {
         vector: queryEmbedding,
         limit: topK,
         with_payload: true
       });
-    } catch {
-      return [];
+      const mapped = results.map((result) => {
+        const payload = result.payload as Record<string, unknown>;
+        return {
+          id: String(result.id),
+          text: String(payload.text ?? ""),
+          source: (payload.source as "chat" | "obsidian") ?? "chat",
+          timestamp: String(payload.createdAt ?? new Date().toISOString()),
+          score: result.score ?? undefined,
+          metadata: payload
+        };
+      });
+      logger.info("qdrant_search_completed", {
+        module: "QdrantMemoryRepository",
+        action: "searchMemories",
+        collectionName: this.args.collectionName,
+        topK,
+        resultCount: mapped.length,
+        error: null
+      });
+      return mapped;
+    } catch (error) {
+      logger.error("qdrant_search_failed", {
+        module: "QdrantMemoryRepository",
+        action: "searchMemories",
+        collectionName: this.args.collectionName,
+        topK,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
-
-    return results.map((result) => {
-      const payload = result.payload as Record<string, unknown>;
-      return {
-        id: String(result.id),
-        text: String(payload.text ?? ""),
-        source: (payload.source as "chat" | "obsidian") ?? "chat",
-        timestamp: String(payload.createdAt ?? new Date().toISOString()),
-        score: result.score ?? undefined,
-        metadata: payload
-      };
-    });
   }
 
   public async findNearDuplicate(text: string): Promise<MemoryRecord | null> {
-    const contentHash = hashText(text);
-    let result;
     try {
-      result = await this.client.scroll(this.args.collectionName, {
+      const contentHash = hashText(text);
+      const result = await this.client.scroll(this.args.collectionName, {
         limit: 1,
         with_payload: true,
         with_vector: false,
@@ -122,23 +183,34 @@ export class QdrantMemoryRepository implements MemoryRepository {
           ]
         }
       });
-    } catch {
-      return null;
-    }
+      const point = result.points[0];
+      if (!point) {
+        return null;
+      }
 
-    const point = result.points[0];
-    if (!point) {
-      return null;
+      const payload = point.payload as Record<string, unknown>;
+      const memory = {
+        id: String(point.id),
+        text: String(payload.text ?? ""),
+        source: (payload.source as "chat" | "obsidian") ?? "chat",
+        timestamp: String(payload.createdAt ?? new Date().toISOString()),
+        metadata: payload
+      };
+      logger.info("qdrant_near_duplicate_found", {
+        module: "QdrantMemoryRepository",
+        action: "findNearDuplicate",
+        shortId: payload.shortId,
+        error: null
+      });
+      return memory;
+    } catch (error) {
+      logger.error("qdrant_find_duplicate_failed", {
+        module: "QdrantMemoryRepository",
+        action: "findNearDuplicate",
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
-
-    const payload = point.payload as Record<string, unknown>;
-    return {
-      id: String(point.id),
-      text: String(payload.text ?? ""),
-      source: (payload.source as "chat" | "obsidian") ?? "chat",
-      timestamp: String(payload.createdAt ?? new Date().toISOString()),
-      metadata: payload
-    };
   }
 
   public async listMemories(limit: number): Promise<MemoryRecord[]> {
@@ -153,7 +225,7 @@ export class QdrantMemoryRepository implements MemoryRepository {
         const bTs = String((b.payload as Record<string, unknown>)?.createdAt ?? "");
         return bTs.localeCompare(aTs);
       });
-      return sorted.map((point) => {
+      const mapped = sorted.map((point) => {
         const payload = point.payload as Record<string, unknown>;
         const id = String(point.id);
         const shortId = String(payload.shortId ?? shortIdFrom(id));
@@ -168,8 +240,22 @@ export class QdrantMemoryRepository implements MemoryRepository {
           }
         };
       });
-    } catch {
-      return [];
+      logger.info("qdrant_list_memories_completed", {
+        module: "QdrantMemoryRepository",
+        action: "listMemories",
+        limit,
+        resultCount: mapped.length,
+        error: null
+      });
+      return mapped;
+    } catch (error) {
+      logger.error("qdrant_list_memories_failed", {
+        module: "QdrantMemoryRepository",
+        action: "listMemories",
+        limit,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
   }
 
@@ -177,15 +263,33 @@ export class QdrantMemoryRepository implements MemoryRepository {
     try {
       const point = await this.findPointByShortId(shortId);
       if (!point) {
+        logger.info("qdrant_delete_memory_not_found", {
+          module: "QdrantMemoryRepository",
+          action: "deleteMemoryByShortId",
+          shortId,
+          error: null
+        });
         return false;
       }
       await this.client.delete(this.args.collectionName, {
         wait: true,
         points: [point.id]
       });
+      logger.info("qdrant_delete_memory_completed", {
+        module: "QdrantMemoryRepository",
+        action: "deleteMemoryByShortId",
+        shortId,
+        error: null
+      });
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      logger.error("qdrant_delete_memory_failed", {
+        module: "QdrantMemoryRepository",
+        action: "deleteMemoryByShortId",
+        shortId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
   }
 
@@ -193,11 +297,17 @@ export class QdrantMemoryRepository implements MemoryRepository {
     try {
       const point = await this.findPointByShortId(shortId);
       if (!point) {
+        logger.info("qdrant_get_memory_not_found", {
+          module: "QdrantMemoryRepository",
+          action: "getMemoryByShortId",
+          shortId,
+          error: null
+        });
         return null;
       }
       const payload = point.payload as Record<string, unknown>;
       const id = String(point.id);
-      return {
+      const memory = {
         id,
         text: String(payload.text ?? ""),
         source: (payload.source as "chat" | "obsidian") ?? "chat",
@@ -208,8 +318,21 @@ export class QdrantMemoryRepository implements MemoryRepository {
           shortId: String(payload.shortId ?? shortIdFrom(id))
         }
       };
-    } catch {
-      return null;
+      logger.info("qdrant_get_memory_completed", {
+        module: "QdrantMemoryRepository",
+        action: "getMemoryByShortId",
+        shortId,
+        error: null
+      });
+      return memory;
+    } catch (error) {
+      logger.error("qdrant_get_memory_failed", {
+        module: "QdrantMemoryRepository",
+        action: "getMemoryByShortId",
+        shortId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
     }
   }
 

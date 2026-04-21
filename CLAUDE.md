@@ -3,53 +3,46 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 Overview
-- Purpose: backend for a personal AI assistant (Telegram front-end) implemented in Node.js + TypeScript.
-- Single-user v1 design: SQLite for conversational history, Qdrant for semantic memory (optional), Obsidian for notes, pluggable executors (LLM / OpenCode).
+- Purpose: backend for a personal AI assistant with a Telegram front-end, written in Node.js + TypeScript.
+- Single-user v1 design: SQLite for conversational history, optional Qdrant for semantic memory, Obsidian for note storage, and pluggable executor backends.
 
 Common commands
 - Install deps: npm install
-- Dev (run with tsx, auto-restart not configured): npm run dev
+- Run in development: npm run dev
 - Build: npm run build
 - Run compiled build: npm start
-- Run tests (all): npm test
+- Run all tests: npm test
 - Run a single test file: npx vitest run tests/<file>.test.ts or npm test -- tests/<file>.test.ts
 - Run a single named test: npx vitest -t "<test name>" or npm test -- -t "<test name>"
-- Run Qdrant locally (optional): docker compose up -d
+- Start Qdrant locally (optional): docker compose up -d
 
 Where to look (high-level)
-- App bootstrap and composition: [src/app/bootstrap.ts:61-214](src/app/bootstrap.ts#L61-L214) — constructs repositories, services, executors and starts Telegram polling.
-- Main conversational flow / decision logic: [src/orchestrator/orchestrator.ts:167-600](src/orchestrator/orchestrator.ts#L167-L600) — intent classification, history compression, RAG retrieval, executor selection, memory persist/confirmation, and debug-mode output.
-- Memory persistence and fallbacks: memory repository construction in [src/app/bootstrap.ts:36-59](src/app/bootstrap.ts#L36-L59) — attempts Qdrant, falls back to NullMemoryRepository; embedding probe detects vector dimension.
-- RAG surface: [src/rag-service](src/rag-service/) — embeddings, retrieval, reranking and relevance filters used by orchestrator.
-- Executor layer: [src/agent-executor](src/agent-executor/) — LlmExecutor + optional OpenCodeExecutor; selection happens via ExecutorRouter ([src/orchestrator/executor-router.ts]).
-- Telegram ingress: [src/message-handler](src/message-handler/) — long-polling handler that delegates to CommandRouter or Orchestrator.
-- Command router: [src/command-router](src/command-router/) — deterministic commands (e.g. /note, /memories, /config, /set).
-- Obsidian integration: [src/obsidian-service](src/obsidian-service/) — where notes are created and file paths reported to users.
-- Runtime config: [src/config/runtime-config-service.ts] — overrides for rag_top_k, executor choice, and other runtime knobs.
-- Optimization & logging: [src/optimization] and [src/shared/logger.ts] — structured JSON logs and agent optimization services for self-observation.
+- App composition: [src/app/bootstrap.ts:61-214](src/app/bootstrap.ts#L61-L214) — constructs config, repositories, services, executors, orchestrator, command router, and Telegram polling.
+- Main runtime flow: [src/orchestrator/orchestrator.ts:167-600](src/orchestrator/orchestrator.ts#L167-L600) — intent classification, history/RAG context assembly, executor selection, memory persistence, and debug-mode output.
+- Memory persistence and fallback behavior: [src/app/bootstrap.ts:36-59](src/app/bootstrap.ts#L36-L59) and [src/memory-service](src/memory-service/) — SQLite history is always used; Qdrant is optional and falls back to NullMemoryRepository.
+- RAG layer: [src/rag-service](src/rag-service/) — embedding generation, retrieval, reranking, duplicate filtering, and relevance scoring.
+- Executor layer: [src/agent-executor](src/agent-executor/) — LlmExecutor is the default, OpenCodeExecutor is optional and only enabled when EXECUTOR_MODE is set and the Claude CLI is available.
+- Telegram ingress: [src/message-handler/telegram-bot.ts](src/message-handler/telegram-bot.ts) — long polling entrypoint that routes slash commands to CommandRouter or conversational inputs to Orchestrator.
+- Command router: [src/command-router](src/command-router/) — deterministic Telegram commands like /note, /memories, /config, /set, and tool-related operations.
+- Runtime config: [src/config/runtime-config-service.ts](src/config/runtime-config-service.ts) — supports runtime overrides for settings like rag_top_k and executor behavior without restart.
+- Debug and optimization: [src/optimization](src/optimization/) and [src/shared/logger.ts](src/shared/logger.ts) — structured logging, execution insights, and self-optimization services.
 
 Important configuration and env vars
 - Copy .env.example → .env and populate at least: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY, ALLOWED_TELEGRAM_USER_ID, OBSIDIAN_VAULT_PATH.
-- Other env/config knobs (selected): RAG_MIN_RELEVANCE_SCORE, MEMORY_SAVE_THRESHOLD, MEMORY_SEMANTIC_DUPLICATE_SCORE, INTENT_LLM_FALLBACK_THRESHOLD, WEB_SEARCH_PROVIDER, EXECUTOR_MODE, LLM_PROVIDER, OPENAI_MODEL, OPENAI_EMBEDDING_MODEL.
-- Runtime config file path: RUNTIME_CONFIG_PATH (used by RuntimeConfigService to change values without restart).
+- Other important env/config knobs: RAG_MIN_RELEVANCE_SCORE, MEMORY_SAVE_THRESHOLD, MEMORY_SEMANTIC_DUPLICATE_SCORE, INTENT_LLM_FALLBACK_THRESHOLD, WEB_SEARCH_PROVIDER, EXECUTOR_MODE, LLM_PROVIDER, OPENAI_MODEL, OPENAI_EMBEDDING_MODEL, RUNTIME_CONFIG_PATH.
 
 Behavioral notes for Claude Code
-- Prefer small, local edits; avoid large refactors without entering plan mode. This repo composes many pluggable services in bootstrap — changing constructor args or wiring touches runtime behavior broadly.
-- When changing memory, RAG, or embedding behavior, update both bootstrap wiring and rag-service tests. Vector size is probed at runtime: take care when changing embedding model constants.
-- Debug-mode: debug output is appended to assistant responses when DebugModeService.isEnabled(userId) — useful for troubleshooting; see formatDebugModeBlock in [src/orchestrator/orchestrator.ts:144-165](src/orchestrator/orchestrator.ts#L144-L165).
-- Safe defaults / fallbacks: Qdrant unavailability falls back to NullMemoryRepository (no-op memory). OpenCode executor is optional and guarded by EXECUTOR_MODE.
+- Prefer small, local edits; avoid large refactors without entering plan mode. This repo composes many pluggable services in bootstrap, so constructor wiring changes can affect runtime behavior broadly.
+- When changing memory, RAG, or embedding behavior, update bootstrap wiring and rag-service tests. Embedding dimension is probed at runtime.
+- Debug mode appends debug output to assistant responses when enabled for a user; see [src/orchestrator/orchestrator.ts:144-165](src/orchestrator/orchestrator.ts#L144-L165).
+- Safe defaults / fallbacks: Qdrant unavailability falls back to NullMemoryRepository; OpenCode executor is optional and guarded by EXECUTOR_MODE + Claude CLI availability.
 
 Files to read first when onboarding
-- [README.md](README.md) — quick orientation and env list
+- [README.md](README.md)
 - [src/app/bootstrap.ts:61-214](src/app/bootstrap.ts#L61-L214)
 - [src/orchestrator/orchestrator.ts:167-600](src/orchestrator/orchestrator.ts#L167-L600)
 - [src/rag-service/rag-service.ts](src/rag-service/rag-service.ts)
 - [src/agent-executor/llm-executor.ts](src/agent-executor/llm-executor.ts)
 
 Testing and CI notes
-- Tests use Vitest (devDependency). There is no CI config in the repo root; keep tests fast and avoid starting heavy external services during unit tests. Mock Qdrant and Playwright interactions where possible.
-
-What I did not include
-- I intentionally omitted file-by-file listings and generic coding guidelines.
-
-If you want, I can open a small PR adding this file to the repo and run the test suite locally. 
+- Tests use Vitest. There is no CI config in the repo root; keep tests fast and avoid starting heavy external services during unit tests.

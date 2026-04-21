@@ -20,6 +20,12 @@ export interface ConversationMessage {
   intent: Intent | "UNCLASSIFIED";
 }
 
+export interface ConversationMemoryMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+}
+
 export interface MemoryRecord {
   id: string;
   text: string;
@@ -61,8 +67,14 @@ export interface ExecutionRequest {
   };
 }
 
+export interface ToolCall {
+  tool: string;
+  input: Record<string, unknown>;
+}
+
 export interface ExecutionResult {
   replyText: string;
+  toolCalls?: ToolCall[];
   shouldPersistMemory: boolean;
   memoryText?: string;
   shouldCreateNote: boolean;
@@ -80,6 +92,7 @@ export interface HistoryRepository {
   init(): Promise<void>;
   saveMessage(message: ConversationMessage): Promise<void>;
   getRecentMessages(chatId: string, limit: number): Promise<ConversationMessage[]>;
+  getMessagesByDate(chatId: string, date: string): Promise<ConversationMessage[]>;
   clearChatHistory(chatId: string): Promise<number>;
 }
 

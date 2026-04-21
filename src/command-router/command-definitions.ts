@@ -108,6 +108,35 @@ export const commandDefinitions: CommandDefinition[] = [
     category: "Sistema"
   },
   {
+    name: "/ask",
+    usage: "/ask <pergunta>",
+    description: "Pergunta para o assistente Claude Code (sem executar nada)",
+    handler: "ask",
+    category: "Sistema"
+  },
+  {
+    name: "/build",
+    usage: "/build <descricao>",
+    description: "Gera codigo ou script sem executar",
+    handler: "build",
+    category: "Sistema"
+  },
+  {
+    name: "/run",
+    usage: "/run <comando>",
+    description: "Executa comando local seguro com whitelist",
+    handler: "run",
+    category: "Shell",
+    needsContext: true
+  },
+  {
+    name: "/diary",
+    usage: "/diary",
+    description: "Gera e salva o diario inteligente do dia",
+    handler: "diary",
+    category: "Diario"
+  },
+  {
     name: "/debug",
     usage: "/debug on|off",
     description: "Ativa/desativa debug mode",
@@ -236,10 +265,11 @@ export const commandDefinitions: CommandDefinition[] = [
     needsContext: true
   },
   {
-    name: "/claude_code",
-    usage: "/claude_code <instrucao>",
-    description: "Executa uma instrucao no Claude Code CLI (restrito)",
+    name: "/claude",
+    usage: "/claude <instrucao>",
+    description: "Executa uma instrucao no Claude Code CLI (programacao e analise)",
     handler: "claudeCode",
-    category: "Sistema"
+    category: "Sistema",
+    needsContext: true
   }
 ];

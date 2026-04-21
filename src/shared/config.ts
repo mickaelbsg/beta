@@ -8,7 +8,6 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().min(1),
   OPENAI_MODEL: z.string().min(1).default("gpt-4.1"),
   OPENAI_FALLBACK_MODEL: z.string().min(1).default("gh/gpt-5-mini"),
-  OPENAI_CHAT_MODEL: z.string().min(1).optional(),
   OPENAI_EMBEDDING_MODEL: z.string().min(1).default("text-embedding-3-small"),
   LLM_PROVIDER: z.enum(["omniroute", "openai"]).default("omniroute"),
   OMNIROUTE_BASE_URL: z.string().url().default("http://localhost:20128/v1"),
@@ -17,9 +16,8 @@ const schema = z.object({
   QDRANT_URL: z.string().url(),
   QDRANT_API_KEY: z.string().optional(),
   QDRANT_COLLECTION_NAME: z.string().min(1).default("memories"),
-  OBSIDIAN_VAULT_PATH: z.string().min(1),
+  OBSIDIAN_VAULT_PATH: z.string().min(1).default("./memoria_beta"),
   EXECUTOR_MODE: z.enum(["llm", "opencode"]).default("llm"),
-  WEB_SEARCH_MODE: z.enum(["mock"]).default("mock"),
   WEB_SEARCH_PROVIDER: z
     .enum(["tavily", "serpapi", "ddg", "google_scrape", "mock"])
     .default("google_scrape"),
@@ -127,9 +125,5 @@ const schema = z.object({
 export type AppConfig = z.infer<typeof schema>;
 
 export function loadConfig(): AppConfig {
-  const parsed = schema.parse(process.env);
-  return {
-    ...parsed,
-    OPENAI_CHAT_MODEL: parsed.OPENAI_CHAT_MODEL ?? parsed.OPENAI_MODEL
-  };
+  return schema.parse(process.env);
 }

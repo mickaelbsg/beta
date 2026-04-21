@@ -13,9 +13,15 @@ function safeJsonParse<T>(input: string): T | null {
 export class OpenAIProvider implements LLMProvider {
   public readonly name = "openai" as const;
   private readonly client: OpenAI;
+  private readonly hasKey: boolean;
 
   public constructor(apiKey: string) {
+    this.hasKey = Boolean(apiKey && !apiKey.includes("local-fallback"));
     this.client = new OpenAI({ apiKey });
+  }
+
+  public isConfigured(): boolean {
+    return this.hasKey;
   }
 
   public async generateResponse(input: {
@@ -31,7 +37,7 @@ export class OpenAIProvider implements LLMProvider {
         {
           role: "system",
           content:
-            "Responda APENAS JSON valido com chaves: replyText, shouldPersistMemory, memoryText, shouldCreateNote, noteTitle, noteContent."
+            "Responda APENAS JSON valido com chaves: replyText, shouldPersistMemory, memoryText, shouldCreateNote, noteTitle, noteContent, toolCalls (array de {tool, input})."
         },
         {
           role: "user",

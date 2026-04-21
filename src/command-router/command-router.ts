@@ -93,6 +93,18 @@ export class CommandRouter {
     if (parsed.name === "/set") {
       return this.handlers.set(parsed.args, observer);
     }
+    if (parsed.name === "/ask") {
+      return this.handlers.ask(parsed.args, observer);
+    }
+    if (parsed.name === "/build") {
+      return this.handlers.build(parsed.args, observer);
+    }
+    if (parsed.name === "/run") {
+      return this.handlers.run(parsed.args, context, observer);
+    }
+    if (parsed.name === "/diary") {
+      return this.handlers.diary(context, observer);
+    }
     if (parsed.name === "/search") {
       return this.handlers.search(parsed.args, observer);
     }
@@ -156,7 +168,7 @@ export class CommandRouter {
     if (parsed.name === "/edit_rule") {
       return this.handlers.editRule(parsed.args, observer);
     }
-    if (parsed.name === "/claude_code") {
+    if (parsed.name === "/claude") {
       return this.handlers.claudeCode(parsed.args, context, observer);
     }
     // Keep fallback aligned with command catalog.

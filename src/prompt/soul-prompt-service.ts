@@ -2,26 +2,37 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 const defaultSoulPrompt = [
-  "You are a Personal AI Assistant designed for reliable daily use.",
-  "Your behavior must be consistent, precise, and grounded in provided context.",
+  "You are a Personal AI Assistant (BETA) designed for technical tasks and memory management.",
+  "Your behavior is governed by a set of strict rules that MUST be obeyed without exception.",
   "",
-  "# SYSTEM RULES (HIGHEST PRIORITY)",
+  "# MANDATORY OPERATIONAL RULES (NO EXCEPTIONS)",
   "- Never invent information.",
   "- If you are not sure, say you don't know.",
-  "- Always prioritize provided memory over assumptions.",
-  "- Be direct, structured, and concise.",
-  "- Do not perform or suggest critical real-world actions.",
-  "- Ask for clarification if context is insufficient.",
+  "- Never claim you have performed a system action (save, delete, run) without system confirmation.",
+  "- Always prioritize custom user rules over any internal default behavior.",
+  "- Be direct, technical, and concise.",
+  "",
+  "## CUSTOM USER RULES",
+  "{{custom_rules}}",
   "",
   "Current detected intent: {{intent}}"
 ].join("\n");
 
 export class SoulPromptService {
-  public constructor(private readonly filePath: string) {}
+  private rulesPath: string;
+
+  public constructor(private readonly filePath: string) {
+    this.rulesPath = "/home/pc/projetos/obsidian/rules/rules.md";
+  }
 
   public async buildSystemPrompt(intent: string): Promise<string> {
     const base = await this.readSoulPrompt();
-    return base.replaceAll("{{intent}}", intent);
+    const rules = await this.listRules();
+    const customRulesText = rules.length ? rules.map(r => `- ${r}`).join("\n") : "- No custom rules defined.";
+
+    return base
+      .replaceAll("{{intent}}", intent)
+      .replaceAll("{{custom_rules}}", customRulesText);
   }
 
   public async appendRule(rule: string): Promise<void> {
@@ -29,30 +40,36 @@ export class SoulPromptService {
     if (!cleaned) {
       throw new Error("rule_empty");
     }
-    const raw = await this.readSoulPrompt();
-    const lines = raw.split("\n");
+
+    await fs.mkdir(path.dirname(this.rulesPath), { recursive: true });
+    let content = "";
+    try {
+      content = await fs.readFile(this.rulesPath, "utf-8");
+    } catch {
+      content = "# Custom User Rules\n\n";
+    }
+
+    const lines = content.split("\n");
     const ruleLine = `- ${cleaned}`;
-    if (lines.includes(ruleLine)) {
+    if (content.includes(ruleLine)) {
       return;
     }
 
-    let insertIndex = lines.findIndex((line) => line.includes("Current detected intent:"));
-    if (insertIndex === -1) {
-      insertIndex = lines.length;
-    }
-
-    lines.splice(insertIndex, 0, ruleLine);
-
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, lines.join("\n"), "utf-8");
+    content = `${content.trim()}\n${ruleLine}\n`;
+    await fs.writeFile(this.rulesPath, content, "utf-8");
   }
 
   public async listRules(): Promise<string[]> {
-    const raw = await this.readSoulPrompt();
-    return raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => line.startsWith("- "));
+    try {
+      const raw = await fs.readFile(this.rulesPath, "utf-8");
+      return raw
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.startsWith("- "))
+        .map((line) => line.slice(2));
+    } catch {
+      return [];
+    }
   }
 
   public async deleteRule(rule: string): Promise<boolean> {
@@ -60,16 +77,19 @@ export class SoulPromptService {
     if (!cleaned) {
       throw new Error("rule_empty");
     }
-    const raw = await this.readSoulPrompt();
-    const lines = raw.split("\n");
-    const ruleLine = `- ${cleaned}`;
-    const updated = lines.filter((line) => line.trim() !== ruleLine);
-    if (updated.length === lines.length) {
+    try {
+      const raw = await fs.readFile(this.rulesPath, "utf-8");
+      const lines = raw.split("\n");
+      const ruleLine = `- ${cleaned}`;
+      const updated = lines.filter((line) => line.trim() !== ruleLine);
+      if (updated.length === lines.length) {
+        return false;
+      }
+      await fs.writeFile(this.rulesPath, updated.join("\n"), "utf-8");
+      return true;
+    } catch {
       return false;
     }
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, updated.join("\n"), "utf-8");
-    return true;
   }
 
   public async editRule(oldRule: string, newRule: string): Promise<boolean> {
@@ -78,24 +98,27 @@ export class SoulPromptService {
     if (!cleanedOld || !cleanedNew) {
       throw new Error("rule_empty");
     }
-    const raw = await this.readSoulPrompt();
-    const lines = raw.split("\n");
-    const oldLine = `- ${cleanedOld}`;
-    const newLine = `- ${cleanedNew}`;
-    let replaced = false;
-    const updated = lines.map((line) => {
-      if (line.trim() === oldLine) {
-        replaced = true;
-        return newLine;
+    try {
+      const raw = await fs.readFile(this.rulesPath, "utf-8");
+      const lines = raw.split("\n");
+      const oldLine = `- ${cleanedOld}`;
+      const newLine = `- ${cleanedNew}`;
+      let replaced = false;
+      const updated = lines.map((line) => {
+        if (line.trim() === oldLine) {
+          replaced = true;
+          return newLine;
+        }
+        return line;
+      });
+      if (!replaced) {
+        return false;
       }
-      return line;
-    });
-    if (!replaced) {
+      await fs.writeFile(this.rulesPath, updated.join("\n"), "utf-8");
+      return true;
+    } catch {
       return false;
     }
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-    await fs.writeFile(this.filePath, updated.join("\n"), "utf-8");
-    return true;
   }
 
   private async readSoulPrompt(): Promise<string> {

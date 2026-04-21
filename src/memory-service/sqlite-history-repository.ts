@@ -85,6 +85,42 @@ export class SqliteHistoryRepository implements HistoryRepository {
       .reverse();
   }
 
+  public async getMessagesByDate(chatId: string, date: string): Promise<ConversationMessage[]> {
+    if (!this.db) {
+      throw new Error("sqlite_not_initialized");
+    }
+    const start = `${date}T00:00:00.000Z`;
+    const endDate = new Date(`${date}T00:00:00.000Z`);
+    endDate.setUTCDate(endDate.getUTCDate() + 1);
+    const end = endDate.toISOString();
+
+    const stmt = this.db.prepare(`
+      SELECT id, chat_id, role, content, intent, timestamp
+      FROM messages
+      WHERE chat_id = ?
+        AND timestamp >= ?
+        AND timestamp < ?
+      ORDER BY timestamp ASC
+    `);
+    const rows = stmt.all(chatId, start, end) as Array<{
+      id: string;
+      chat_id: string;
+      role: ConversationMessage["role"];
+      content: string;
+      intent: ConversationMessage["intent"];
+      timestamp: string;
+    }>;
+
+    return rows.map((row) => ({
+      id: row.id,
+      chatId: row.chat_id,
+      role: row.role,
+      content: row.content,
+      intent: row.intent,
+      timestamp: row.timestamp
+    }));
+  }
+
   public async clearChatHistory(chatId: string): Promise<number> {
     if (!this.db) {
       throw new Error("sqlite_not_initialized");

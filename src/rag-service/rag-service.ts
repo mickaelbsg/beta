@@ -1,6 +1,9 @@
+import crypto from "node:crypto";
 import type { MemoryRecord, MemoryRepository } from "../shared/types.js";
+import { logger } from "../shared/logger.js";
 import { EmbeddingService } from "./embedding-service.js";
 import { RagReranker } from "./rag-reranker.js";
+import type { ObsidianWriterService } from "../obsidian-service/obsidian-writer-service.js";
 
 interface SaveMemoryInput {
   text: string;
@@ -10,7 +13,15 @@ interface SaveMemoryInput {
 }
 
 function createShortMemoryId(): string {
-  return `mem_${Math.random().toString(36).slice(2, 6)}`;
+  return `mem_${crypto.randomUUID()}`;
+}
+
+function normalizeText(input: string): string {
+  return input.replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function normalizeHashText(input: string): string {
+  return crypto.createHash("sha256").update(normalizeText(input)).digest("hex");
 }
 
 export class RagService {
@@ -26,63 +37,126 @@ export class RagService {
   ) {}
 
   public async retrieveRelevantMemories(query: string, topK: number): Promise<MemoryRecord[]> {
-    try {
-      const embedding = await this.embeddingService.generateEmbedding(query);
-      if (!embedding.length) {
-        return [];
-      }
+    const context = {
+      module: "RagService",
+      action: "retrieveRelevantMemories",
+      query,
+      topK,
+      resultCount: 0,
+      error: null as string | null
+    };
 
-      const records = await this.memoryRepository.searchMemories(embedding, topK);
-      const reranked = this.reranker.rerank(query, records);
-      const filtered = reranked.filter((record) => (record.score ?? 0) >= this.minRelevanceScore);
-
-      const seen = new Set<string>();
-      return filtered.filter((record) => {
-        const key =
-          (record.metadata?.contentHash as string | undefined) ?? record.text.toLowerCase().trim();
-        if (seen.has(key)) {
-          return false;
-        }
-        seen.add(key);
-        return true;
-      });
-    } catch {
+    const embedding = await this.embeddingService.generateEmbedding(query);
+    if (!embedding.length) {
+      logger.warn("rag_embedding_empty", { ...context, error: "empty_embedding" });
       return [];
     }
+
+    const records = await this.memoryRepository.searchMemories(embedding, Math.max(topK, 20));
+    const refined = this.reranker.rerank(query, records).slice(0, Math.min(8, records.length));
+    const filtered = refined.filter((record) => (record.score ?? 0) >= this.minRelevanceScore);
+
+    const unique: MemoryRecord[] = [];
+    const seen = new Set<string>();
+    for (const record of filtered) {
+      const key =
+        String(record.metadata?.shortId ?? record.metadata?.contentHash ?? record.text.toLowerCase().trim());
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      unique.push(record);
+    }
+
+    context.resultCount = unique.length;
+    logger.info("rag_retrieve_completed", context);
+    return unique;
   }
 
   public async saveMemory(input: SaveMemoryInput): Promise<MemoryRecord | null> {
+    const context = {
+      module: "RagService",
+      action: "saveMemory",
+      source: input.source,
+      chatId: input.chatId,
+      resultId: null as string | null,
+      error: null as string | null
+    };
+
     if (!input.text.trim()) {
-      return null;
-    }
-    const embedding = await this.embeddingService.generateEmbedding(input.text);
-    const now = new Date().toISOString();
-    const hashKey = `${input.chatId ?? "global"}:${this.hashText(input.text)}`;
-    const lastSavedAt = this.recentSaveByChatAndHash.get(hashKey);
-    if (lastSavedAt && Date.now() - lastSavedAt < this.frequencyWindowMs) {
+      logger.warn("rag_save_empty_text", { ...context, error: "empty_text" });
       return null;
     }
 
-    const hashDuplicate = await this.memoryRepository.findNearDuplicate(input.text);
+    const normalizedText = normalizeText(input.text);
+    const embedding = await this.embeddingService.generateEmbedding(normalizedText);
+    const now = new Date().toISOString();
+    const hashKey = `${input.chatId ?? "global"}:${normalizeHashText(normalizedText)}`;
+    const lastSavedAt = this.recentSaveByChatAndHash.get(hashKey);
+    if (lastSavedAt && Date.now() - lastSavedAt < this.frequencyWindowMs) {
+      logger.info("rag_save_skipped_frequency", { ...context, error: "frequency_limit" });
+      return null;
+    }
+
+    const hashDuplicate = await this.memoryRepository.findNearDuplicate(normalizedText);
     if (hashDuplicate) {
+      logger.info("rag_save_duplicate_hash", {
+        ...context,
+        resultId: hashDuplicate.id,
+        error: null
+      });
       return hashDuplicate;
     }
 
     const semanticallyClose = await this.memoryRepository.searchMemories(embedding, 1);
-    if ((semanticallyClose[0]?.score ?? 0) >= this.semanticDuplicateScore) {
-      return semanticallyClose[0] ?? null;
+    const closest = semanticallyClose[0];
+    if ((closest?.score ?? 0) >= this.semanticDuplicateScore) {
+      const sameContext = String(closest.metadata?.chatId ?? "") === String(input.chatId ?? "");
+      logger.info("rag_save_duplicate_semantic", {
+        ...context,
+        resultId: closest?.id ?? null,
+        score: closest?.score ?? null,
+        sameContext,
+        error: null
+      });
+      if (sameContext && closest && closest.text !== normalizedText) {
+        const mergedText = `${closest.text}\n${normalizedText}`.trim();
+        const mergedEmbedding = await this.embeddingService.generateEmbedding(mergedText);
+        const updated = await this.memoryRepository.saveMemory({
+          id: closest.id,
+          text: mergedText,
+          source: input.source,
+          timestamp: now,
+          vector: mergedEmbedding,
+          metadata: {
+            ...closest.metadata,
+            shortId: String(closest.metadata?.shortId ?? createShortMemoryId()),
+            chatId: input.chatId,
+            memoryType: input.metadata?.memoryType ?? closest.metadata?.memoryType,
+            memoryCategory: input.metadata?.memoryCategory ?? closest.metadata?.memoryCategory,
+            originalText: `${closest.metadata?.originalText ?? closest.text}\n${input.text}`
+          }
+        });
+        return updated;
+      }
+      return closest ?? null;
     }
 
     const saved = await this.memoryRepository.saveMemory({
-      text: input.text,
+      text: normalizedText,
       source: input.source,
       timestamp: now,
       vector: embedding,
       metadata: {
         shortId: String(input.metadata?.shortId ?? createShortMemoryId()),
-        ...(input.metadata ?? {})
+        chatId: input.chatId,
+        originalText: input.text,
+        ...input.metadata
       }
     });
+
+    context.resultId = saved.id;
+    logger.info("rag_save_completed", { ...context });
     this.recentSaveByChatAndHash.set(hashKey, Date.now());
     return saved;
   }
@@ -99,11 +173,7 @@ export class RagService {
   }
 
   private hashText(input: string): string {
-    let hash = 0;
-    for (let i = 0; i < input.length; i += 1) {
-      hash = (hash * 31 + input.charCodeAt(i)) >>> 0;
-    }
-    return String(hash);
+    return normalizeHashText(input);
   }
 
   public async listMemories(limit: number): Promise<MemoryRecord[]> {

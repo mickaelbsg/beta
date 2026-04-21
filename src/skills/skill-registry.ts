@@ -1,7 +1,12 @@
 import type { Skill } from "./skill.js";
+import { ClaudeCodeSkill } from "./claude-code-skill.js";
 
 export class SkillRegistry {
   private readonly skills = new Map<string, Skill>();
+
+  public constructor() {
+    this.register(new ClaudeCodeSkill());
+  }
 
   public register(skill: Skill): void {
     this.skills.set(skill.name, skill);

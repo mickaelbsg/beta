@@ -13,12 +13,18 @@ function safeJsonParse<T>(input: string): T | null {
 export class OmniRouteProvider implements LLMProvider {
   public readonly name = "omniroute" as const;
   private readonly client: OpenAI;
+  private readonly hasKey: boolean;
 
   public constructor(baseURL: string, apiKey?: string) {
+    this.hasKey = Boolean(apiKey && !apiKey.includes("local-fallback"));
     this.client = new OpenAI({
       baseURL,
       apiKey: apiKey?.trim() || "omniroute-local"
     });
+  }
+
+  public isConfigured(): boolean {
+    return this.hasKey;
   }
 
   public async generateResponse(input: {
@@ -34,7 +40,7 @@ export class OmniRouteProvider implements LLMProvider {
         {
           role: "system",
           content:
-            "Responda APENAS JSON valido com chaves: replyText, shouldPersistMemory, memoryText, shouldCreateNote, noteTitle, noteContent."
+            "Responda APENAS JSON valido com chaves: replyText, shouldPersistMemory, memoryText, shouldCreateNote, noteTitle, noteContent, toolCalls (array de {tool, input})."
         },
         {
           role: "user",

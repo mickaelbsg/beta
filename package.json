@@ -1,12 +1,13 @@
 {
   "name": "personal-ai-assistant-backend",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "tsx src/app/bootstrap.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/app/bootstrap.js",
+    "cli": "tsx src/cli/cli.ts",
     "test": "vitest run"
   },
   "dependencies": {

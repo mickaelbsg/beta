@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import type {
   ConversationMessage,
+  ExecutionResult,
   HistoryRepository,
   InboundMessage,
   InteractionObserver,
@@ -8,11 +9,15 @@ import type {
   WebSearchService
 } from "../shared/types.js";
 import { RagService } from "../rag-service/rag-service.js";
+import path from "node:path";
 import { ObsidianService } from "../obsidian-service/obsidian-service.js";
+import { ObsidianWriterService } from "../obsidian-service/obsidian-writer-service.js";
+import { ConversationMemoryService } from "./conversation-memory-service.js";
 import { logger } from "../shared/logger.js";
 import { ContextBuilder } from "./context-builder.js";
 import { MemoryScorer } from "./memory-scorer.js";
 import { ExecutorRouter } from "./executor-router.js";
+import { ToolExecutor } from "./tool-executor.js";
 import { RuntimeConfigService } from "../config/runtime-config-service.js";
 import { ExecutionInsightsStore } from "./execution-insights-store.js";
 import { SoulPromptService } from "../prompt/soul-prompt-service.js";
@@ -28,6 +33,8 @@ interface OrchestratorDeps {
   historyRepository: HistoryRepository;
   ragService: RagService;
   obsidianService: ObsidianService;
+  obsidianWriterService?: ObsidianWriterService;
+  conversationMemoryService: ConversationMemoryService;
   intentClassifier: IntentClassifier;
   executorRouter: ExecutorRouter;
   webSearchService: WebSearchService;
@@ -100,9 +107,8 @@ function isMemoryLocationQuestion(input: string): boolean {
   return hasWhere && hasMemoryTerm;
 }
 
-function formatMemorySavedFeedback(text: string, shortId: string): string {
-  const preview = text.replace(/\s+/g, " ").trim().slice(0, 140);
-  return ['💾 Memoria salva:', '', `"${preview}"`, '', `ID: ${shortId}`].join("\n");
+function formatMemorySavedFeedback(_text: string, _shortId: string): string {
+  return '💾 Memória salva no Obsidian.';
 }
 
 async function safeAppendLog(
@@ -164,11 +170,35 @@ function formatDebugModeBlock(ctx: OrchestratorDebugContext): string {
   ].join("\n");
 }
 
+function shouldPersistMemory(input: string): boolean {
+  const text = input.toLowerCase();
+  return (
+    text.includes("meu nome é") ||
+    text.includes("meu nome e") ||
+    text.includes("eu moro") ||
+    text.includes("eu trabalho") ||
+    text.includes("eu uso") ||
+    text.includes("eu gosto") ||
+    text.includes("eu estou estudando") ||
+    text.includes("aprendi que") ||
+    text.includes("anota que") ||
+    text.includes("assisti") ||
+    text.includes("parei no ep") ||
+    text.includes("episódio") ||
+    text.includes("visto o ep")
+  );
+}
+
 export class Orchestrator {
   private readonly contextBuilder = new ContextBuilder();
   private readonly memoryScorer = new MemoryScorer();
+  private readonly toolExecutor: ToolExecutor;
 
-  public constructor(private readonly deps: OrchestratorDeps) {}
+  public constructor(private readonly deps: OrchestratorDeps) {
+    this.toolExecutor = new ToolExecutor({
+      obsidianWriterService: deps.obsidianWriterService
+    });
+  }
 
   public async handleMessage(
     message: InboundMessage,
@@ -200,18 +230,19 @@ export class Orchestrator {
     if (pending && (choice === "sim" || choice === "s" || choice === "nao" || choice === "não" || choice === "n")) {
       this.deps.pendingMemoryConfirmationService.clear(message.chatId);
       if (choice === "sim" || choice === "s") {
-        const saved = await this.deps.ragService.saveMemory({
-          text: pending.text,
-          source: "chat",
+        const noteResult = this.deps.obsidianWriterService
+          ? await this.deps.obsidianWriterService.saveMemoryToObsidian({
+              chatId: message.chatId,
+              content: pending.text,
+              source: "telegram"
+            })
+          : null;
+
+        const shortId = noteResult ? path.basename(noteResult.filePath) : "n/a";
+        logger.info("obsidian_memory_saved", {
           chatId: message.chatId,
-          metadata: {
-            chatId: message.chatId,
-            memoryScore: pending.score,
-            memoryType: pending.memoryType,
-            ...(pending.metadata ?? {})
-          }
+          saved: Boolean(noteResult)
         });
-        const shortId = String(saved?.metadata?.shortId ?? "n/a");
         const baseText = formatMemorySavedFeedback(pending.text, shortId);
         debugContext.intent = "MEMORY_CONFIRMATION";
         debugContext.memorySaved = true;
@@ -283,6 +314,11 @@ export class Orchestrator {
         intent: "QUERY"
       };
       await this.deps.historyRepository.saveMessage(assistantMessage);
+      this.deps.conversationMemoryService.addMessage(message.chatId, {
+        role: "assistant",
+        content: directText,
+        timestamp: Date.now()
+      });
       await safeAppendLog(this.deps.selfOptimizationService, {
         timestamp: new Date().toISOString(),
         session_id: `${message.chatId}:${new Date().toISOString().slice(0, 10)}`,
@@ -311,83 +347,81 @@ export class Orchestrator {
       source: classification.source
     });
 
-    const rawHistory = await this.deps.historyRepository.getRecentMessages(message.chatId, 12);
-    const historyLimit = Math.min(
-      Math.max(this.deps.runtimeConfigService.getNumber("context_history_limit", 5), 3),
-      8
-    );
-    const compressedHistory = this.contextBuilder.buildHistory(rawHistory, message.text, historyLimit);
-    debugContext.historyUsed = compressedHistory.length;
-    const rawHistoryChars = rawHistory.reduce((sum, item) => sum + item.content.length, 0);
-    const compressedHistoryChars = compressedHistory.reduce((sum, item) => sum + item.content.length, 0);
-    debugContext.historyCompressionRatio =
-      rawHistoryChars > 0 ? compressedHistoryChars / rawHistoryChars : 1;
-    await observer?.report("Historico relevante comprimido");
+    const userMemory: import("../shared/types.js").ConversationMemoryMessage = {
+      role: "user",
+      content: message.text,
+      timestamp: Date.now()
+    };
+    this.deps.conversationMemoryService.addMessage(message.chatId, userMemory);
 
-    const ragTopK = this.deps.runtimeConfigService.getNumber("rag_top_k", this.deps.ragTopK);
-    if (classification.intent === "QUERY" || classification.intent === "NOTE") {
-      await observer?.report(`Consultando memoria vetorial (top-k=${ragTopK})`);
+    const history = this.deps.conversationMemoryService.getRecentMessages(message.chatId, 10);
+    debugContext.historyUsed = history.length;
+    await observer?.report("Contexto de conversa recente reunido");
+
+    debugContext.historyCompressionRatio = history.length > 0 ? 1 : 1;
+
+    const useObsidianMemory = classification.intent === "QUERY" || classification.intent === "NOTE" || classification.intent === "CHAT";
+    if (useObsidianMemory) {
+      await observer?.report("Consultando cerebro (Obsidian)");
     }
-    const retrievedMemories =
-      classification.intent === "QUERY" || classification.intent === "NOTE"
-        ? await this.deps.ragService.retrieveRelevantMemories(message.text, ragTopK)
-        : [];
-    const compactMemories = this.contextBuilder.buildMemoryFacts(retrievedMemories, 5);
-    debugContext.ragFound = retrievedMemories.length;
-    debugContext.ragUsed = compactMemories.length;
-    debugContext.ragFiltered = Math.max(0, retrievedMemories.length - compactMemories.length);
-    debugContext.toolsUsed =
-      classification.intent === "QUERY" || classification.intent === "NOTE" ? ["search_memory"] : [];
+    const obsidianFacts = useObsidianMemory && this.deps.obsidianWriterService
+      ? await this.deps.obsidianWriterService.searchObsidian(message.text)
+      : [];
 
-    logger.info("rag_results_count", {
-      chatId: message.chatId,
-      count: classification.intent === "QUERY" || classification.intent === "NOTE" ? retrievedMemories.length : 0
-    });
-    logger.info("rag_filtered_count", {
+    const compactMemories = obsidianFacts.map((fact) => ({
+      id: "obsidian",
+      text: fact,
+      source: "obsidian" as const,
+      timestamp: new Date().toISOString(),
+      metadata: { obsidian: true }
+    }));
+
+    debugContext.ragFound = compactMemories.length;
+    debugContext.ragUsed = compactMemories.length;
+    debugContext.ragFiltered = 0;
+    debugContext.toolsUsed = useObsidianMemory ? ["obsidian_search"] : [];
+    logger.info("obsidian_memory_used", {
       chatId: message.chatId,
       count: compactMemories.length
     });
 
-    let webSearchResults: Awaited<ReturnType<WebSearchService["search"]>> = [];
-    let webAgentText: string | null = null;
-    if (classification.intent === "SEARCH") {
-      if (this.deps.webAgentService) {
-        try {
-          const webAgent = await this.deps.webAgentService.run(
-            {
-              query: message.text,
-              preferredExecutor:
-                this.deps.runtimeConfigService.get("executor") === "opencode" ? "opencode" : "llm"
-            },
-            observer
-          );
-          webAgentText = webAgent.text;
-          webSearchResults = webAgent.sources;
-        } catch {
-          await observer?.report("Web Agent falhou, aplicando fallback de busca");
-          pipelineError = "web_agent_failed";
-        }
-      }
+    const systemPrompt = await this.deps.soulPromptService.buildSystemPrompt(classification.intent);
+    const contextText = this.contextBuilder.buildContext({
+      history,
+      userInput: message.text,
+      ragContext: compactMemories,
+      systemPrompt
+    });
+    await observer?.report("Contexto final montado");
 
-      if (!webSearchResults.length) {
-        try {
-          await observer?.report("Executando busca na web");
-          webSearchResults = await this.deps.webSearchService.search(message.text);
-        } catch {
-          await observer?.report("Busca web falhou, seguindo sem resultados");
-          webSearchResults = [];
-          pipelineError = "web_search_failed";
-        }
-      }
-      if (!webSearchResults.length && pipelineError === "web_search_failed") {
-        webAgentText =
-          "🌐 Resultado:\n\nBusca web indisponivel no momento. Nao consegui acessar resultados externos agora.\n\nFontes:\n- Nenhuma";
+    let memorySaved = false;
+    let savedMemoryId = "";
+    let savedMemoryText = "";
+
+    if (shouldPersistMemory(message.text)) {
+      await observer?.report("Detectado fato relevante, salvando no cerebro");
+      const saveResult = this.deps.obsidianWriterService
+        ? await this.deps.obsidianWriterService.saveMemoryToObsidian({
+            chatId: message.chatId,
+            content: message.text,
+            source: "telegram"
+          })
+        : null;
+
+      if (saveResult) {
+        memorySaved = true;
+        savedMemoryId = path.basename(saveResult.filePath);
+        savedMemoryText = message.text;
+        logger.info("memory_saved", {
+          chatId: message.chatId,
+          memory_saved: true,
+          path: saveResult.filePath
+        });
       }
     }
 
     const preferredExecutor: "llm" | "opencode" =
       this.deps.runtimeConfigService.get("executor") === "opencode" ? "opencode" : "llm";
-    const soulPrompt = await this.deps.soulPromptService.buildSystemPrompt(classification.intent);
     const availableTools = await this.deps.toolAwarenessService.listTools();
     debugContext.toolsAvailable = availableTools.map((item) => item.name);
     const forceToolRule =
@@ -399,14 +433,24 @@ export class Orchestrator {
       responseStyle === "detailed"
         ? "\nResposta em modo detalhado, com contexto e exemplos curtos."
         : "\nResposta em modo curto, direta e objetiva.";
+    const webSearchResults: Awaited<ReturnType<WebSearchService["search"]>> = [];
+    let webAgentText: string | null = null;
+
     const executionRequest = {
       intent: classification.intent,
       userMessage: message.text,
-      recentHistory: compressedHistory,
+      recentHistory: history.map((item) => ({
+        id: "",
+        chatId: message.chatId,
+        role: item.role,
+        content: item.content,
+        timestamp: new Date(item.timestamp).toISOString(),
+        intent: "UNCLASSIFIED" as const
+      })),
       retrievedMemories: compactMemories,
       preferredExecutor,
       availableTools,
-      systemRules: `${soulPrompt}\n${buildIntentInstruction(classification.intent)}${forceToolRule}${profileInstruction}\nObsidian vault path configured: ${this.deps.obsidianService.getVaultPath()}.`,
+      systemRules: `${systemPrompt}\n${buildIntentInstruction(classification.intent)}${forceToolRule}${profileInstruction}\nObsidian vault path configured: ${this.deps.obsidianService.getVaultPath()}.`,
       toolHints: {
         webSearchResults
       }
@@ -423,15 +467,42 @@ export class Orchestrator {
       reason: selection.reason
     });
 
-    let executionResult;
+    let executionResult: ExecutionResult = {
+      replyText: "Nao consegui processar sua mensagem agora.",
+      shouldPersistMemory: false,
+      shouldCreateNote: false
+    };
+
     try {
-      executionResult = webAgentText
-        ? {
-            replyText: webAgentText,
-            shouldPersistMemory: false,
-            shouldCreateNote: false
+      if (webAgentText) {
+        executionResult = {
+          replyText: webAgentText,
+          shouldPersistMemory: false,
+          shouldCreateNote: false
+        };
+      } else {
+        // --- LOOP DE EXECUÇÃO ATIVA (Agente) ---
+        let currentRequest = { ...executionRequest };
+        let steps = 0;
+        const maxSteps = 3;
+
+        while (steps < maxSteps) {
+          executionResult = await this.deps.executorRouter.execute(currentRequest);
+
+          if (executionResult.toolCalls && executionResult.toolCalls.length > 0) {
+            steps++;
+            const call = executionResult.toolCalls[0];
+            await observer?.report(`Executando ferramenta: ${call.tool}`);
+
+            const toolResult = await this.toolExecutor.execute(call, message.chatId);
+
+            // Alimenta o resultado de volta para o modelo continuar pensando
+            currentRequest.userMessage = `${message.text}\n\n[RESULTADO DA FERRAMENTA]:\n${toolResult}\n\nContinue o trabalho com base nesse resultado. Se terminou tudo que foi pedido, dê a resposta final.`;
+            continue;
           }
-        : await this.deps.executorRouter.execute(executionRequest);
+          break;
+        }
+      }
     } catch {
       await observer?.report("Executor falhou, aplicando fallback seguro");
       pipelineError = "executor_failed";
@@ -446,64 +517,78 @@ export class Orchestrator {
     debugContext.providerLatencyMs = executionResult.debug?.latencyMs ?? 0;
 
     let finalText = executionResult.replyText;
-    let memorySaved = false;
-    let savedMemoryId = "";
-    let savedMemoryText = "";
+
     if (classification.intent === "NOTE") {
       await observer?.report("Criando nota no Obsidian");
       const fallbackContent = extractNoteContent(message.text) || message.text;
       const noteTitle = executionResult.noteTitle ?? summarizeText(fallbackContent);
       const noteContent = executionResult.noteContent ?? fallbackContent;
-      const note = await this.deps.obsidianService.createNote({
-        title: noteTitle,
-        content: noteContent
-      });
-      await observer?.report("Salvando nota na memoria vetorial");
-      const saved = await this.deps.ragService.saveMemory({
-        text: noteContent,
-        source: "obsidian",
-        chatId: message.chatId,
-        metadata: {
-          notePath: note.filePath,
-          chatId: message.chatId,
-          memoryType: "note",
-          memoryScore: 1
-        }
-      });
-      memorySaved = Boolean(saved);
+      const note = this.deps.obsidianWriterService
+        ? await this.deps.obsidianWriterService.writeStructuredNote({
+            title: noteTitle,
+            content: noteContent,
+            type: "knowledge",
+            tags: ["obsidian", "note"],
+            metadata: {
+              source: "telegram",
+              chatId: message.chatId,
+              memoryType: "note"
+            }
+          })
+        : await this.deps.obsidianService.createNote({
+            title: noteTitle,
+            content: noteContent
+          });
+      await observer?.report("Salvando nota no cerebro (Obsidian)");
+      const noteResult = this.deps.obsidianWriterService
+        ? await this.deps.obsidianWriterService.saveMemoryToObsidian({
+            chatId: message.chatId,
+            content: note.content,
+            source: "telegram"
+          })
+        : null;
+
+      memorySaved = Boolean(noteResult);
       debugContext.memoryScore = 1;
-      savedMemoryId = String(saved?.metadata?.shortId ?? "");
-      savedMemoryText = noteContent;
+      savedMemoryId = noteResult ? path.basename(noteResult.filePath) : "";
+      logger.info("obsidian_memory_saved", {
+        chatId: message.chatId,
+        saved: memorySaved,
+        path: noteResult?.filePath
+      });
+      savedMemoryText = note.content;
       finalText = note.duplicated
         ? `Nota ja existente em ${note.filePath}.`
         : executionResult.replyText || `Nota criada em ${note.filePath}.`;
       debugContext.toolsUsed = [...new Set([...debugContext.toolsUsed, "create_note", "save_memory"])];
-    } else {
+    } else if (!memorySaved) {
       const candidate = executionResult.memoryText ?? message.text;
       const scored = this.memoryScorer.score(candidate);
       debugContext.memoryScore = scored.score;
-      const shouldAutoSave = executionResult.shouldPersistMemory && scored.score >= this.deps.memorySaveThreshold;
+      const shouldAutoSave = (executionResult.shouldPersistMemory || shouldPersistMemory(candidate)) && scored.score >= 0.3;
       const borderline =
         executionResult.shouldPersistMemory &&
-        scored.score >= 0.6 &&
+        scored.score >= 0.2 &&
         scored.score < this.deps.memorySaveThreshold;
       if (shouldAutoSave) {
-        await observer?.report("Salvando memoria relevante");
-        const saved = await this.deps.ragService.saveMemory({
-          text: candidate,
-          source: "chat",
-          chatId: message.chatId,
-          metadata: {
-            chatId: message.chatId,
-            memoryScore: scored.score,
-            memoryCategory: scored.category,
-            memoryType: scored.memoryType
-          }
-        });
-        memorySaved = Boolean(saved);
-        savedMemoryId = String(saved?.metadata?.shortId ?? "");
+        await observer?.report("Salvando fato no cerebro (Obsidian)");
+        const saveResult = this.deps.obsidianWriterService
+          ? await this.deps.obsidianWriterService.saveMemoryToObsidian({
+              chatId: message.chatId,
+              content: candidate,
+              source: "telegram"
+            })
+          : null;
+
+        memorySaved = Boolean(saveResult);
+        savedMemoryId = saveResult ? path.basename(saveResult.filePath) : "";
         savedMemoryText = candidate;
-        debugContext.toolsUsed = [...new Set([...debugContext.toolsUsed, "save_memory"])];
+        logger.info("obsidian_memory_saved", {
+          chatId: message.chatId,
+          saved: memorySaved,
+          path: saveResult?.filePath
+        });
+        debugContext.toolsUsed = [...new Set([...debugContext.toolsUsed, "obsidian_save"])];
       } else if (borderline) {
         this.deps.pendingMemoryConfirmationService.set(message.chatId, {
           text: candidate,
@@ -528,14 +613,6 @@ export class Orchestrator {
     if ((classification.intent === "SEARCH" && webSearchResults.length > 0) || webAgentText) {
       debugContext.toolsUsed = [...new Set([...debugContext.toolsUsed, "web_search"])];
     }
-    const contextText =
-      executionRequest.systemRules +
-      executionRequest.userMessage +
-      executionRequest.recentHistory.map((item) => item.content).join("\n") +
-      executionRequest.retrievedMemories.map((item) => item.text).join("\n") +
-      (executionRequest.toolHints?.webSearchResults ?? [])
-        .map((item) => `${item.title} ${item.snippet}`)
-        .join("\n");
     debugContext.contextEstimatedTokens = estimateTokens(contextText);
     if (debugEnabled) {
       finalText = `${finalText}\n\n${formatDebugModeBlock(debugContext)}`;
@@ -550,6 +627,11 @@ export class Orchestrator {
       intent: classification.intent
     };
     await this.deps.historyRepository.saveMessage(assistantMessage);
+    this.deps.conversationMemoryService.addMessage(message.chatId, {
+      role: "assistant",
+      content: finalText,
+      timestamp: Date.now()
+    });
     await observer?.report("Resposta final enviada");
 
     logger.info("execution_time", {
@@ -575,9 +657,9 @@ export class Orchestrator {
       input_length: message.text.length,
       output_length: finalText.length,
       rag: {
-        found: retrievedMemories.length,
+        found: compactMemories.length,
         used: compactMemories.length,
-        filtered: Math.max(0, retrievedMemories.length - compactMemories.length)
+        filtered: 0
       },
       memory: {
         score: debugContext.memoryScore ?? 0,

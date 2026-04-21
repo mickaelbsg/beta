@@ -1,6 +1,6 @@
 import type { ExecutionRequest, ExecutionResult, Executor } from "../shared/types.js";
 import { logger } from "../shared/logger.js";
-import { commandDefinitions } from "../command-router/command-definitions.js";
+import { PromptBuilder } from "./prompt-builder.js";
 import type { LLMProvider } from "./providers/llm-provider.js";
 
 interface LlmExecutorArgs {
@@ -15,6 +15,7 @@ export class LlmExecutor implements Executor {
   private readonly fallbackModel?: string;
   private readonly primaryProvider: LLMProvider;
   private readonly fallbackProvider?: LLMProvider;
+  private readonly promptBuilder = new PromptBuilder();
 
   public constructor(args: LlmExecutorArgs) {
     this.model = args.model;
@@ -24,12 +25,22 @@ export class LlmExecutor implements Executor {
   }
 
   public async execute(request: ExecutionRequest): Promise<ExecutionResult> {
-    const prompt = this.buildPrompt(request);
-    const candidates: Array<{ provider: LLMProvider; model: string; isFallback: boolean }> = [
-      { provider: this.primaryProvider, model: this.model, isFallback: false }
-    ];
+    const prompt = this.promptBuilder.build(request);
+    logger.info("llm_prompt_built", {
+      module: "LlmExecutor",
+      action: "execute",
+      model: this.model,
+      inputPreview: request.userMessage.slice(0, 120),
+      promptLength: prompt.length,
+      error: null
+    });
+    const candidates: Array<{ provider: LLMProvider; model: string; isFallback: boolean }> = [];
 
-    if (this.fallbackModel && this.fallbackModel !== this.model) {
+    if (this.primaryProvider.isConfigured()) {
+      candidates.push({ provider: this.primaryProvider, model: this.model, isFallback: false });
+    }
+
+    if (this.fallbackModel && this.fallbackModel !== this.model && this.primaryProvider.isConfigured()) {
       candidates.push({
         provider: this.primaryProvider,
         model: this.fallbackModel,
@@ -37,7 +48,7 @@ export class LlmExecutor implements Executor {
       });
     }
 
-    if (this.fallbackProvider && this.fallbackProvider.name !== this.primaryProvider.name) {
+    if (this.fallbackProvider && this.fallbackProvider.name !== this.primaryProvider.name && this.fallbackProvider.isConfigured()) {
       candidates.push({
         provider: this.fallbackProvider,
         model: this.model,
@@ -52,6 +63,14 @@ export class LlmExecutor implements Executor {
       }
     }
 
+    if (candidates.length === 0) {
+      return {
+        replyText: "Nenhum provedor de IA configurado corretamente no sistema. Verifique suas chaves de API.",
+        shouldPersistMemory: false,
+        shouldCreateNote: false
+      };
+    }
+
     for (const candidate of candidates) {
       const startedAt = Date.now();
       try {
@@ -61,23 +80,24 @@ export class LlmExecutor implements Executor {
           model: candidate.model
         });
 
+        const candidateContext = {
+          module: "LlmExecutor",
+          action: "provider_response",
+          provider: candidate.provider.name,
+          model: candidate.model,
+          usedFallback: candidate.isFallback,
+          latencyMs: Date.now() - startedAt,
+          error: null
+        };
         if (candidate.isFallback) {
           logger.warn("provider_used", {
-            provider: candidate.provider.name,
-            model: candidate.model,
+            ...candidateContext,
             fallback_from: `${this.primaryProvider.name}:${this.model}`
           });
         } else {
-          logger.info("provider_used", {
-            provider: candidate.provider.name,
-            model: candidate.model
-          });
+          logger.info("provider_used", candidateContext);
         }
-        logger.info("provider_latency", {
-          provider: candidate.provider.name,
-          model: candidate.model,
-          ms: Date.now() - startedAt
-        });
+        logger.info("provider_latency", candidateContext);
 
         return {
           ...result,
@@ -90,6 +110,8 @@ export class LlmExecutor implements Executor {
         };
       } catch (error) {
         logger.error("provider_error", {
+          module: "LlmExecutor",
+          action: "execute",
           provider: candidate.provider.name,
           model: candidate.model,
           error: error instanceof Error ? error.message : String(error)
@@ -104,75 +126,4 @@ export class LlmExecutor implements Executor {
     };
   }
 
-  private buildPrompt(request: ExecutionRequest): string {
-    const history = request.recentHistory.map((m) => `- [${m.role}] ${m.content}`).join("\n");
-    const memories = request.retrievedMemories.map((m) => `- ${m.text}`).join("\n");
-    const webSearch = request.toolHints?.webSearchResults
-      ?.map((r) => `${r.title} | ${r.url} | ${r.snippet}`)
-      .join("\n");
-    const searchPolicy =
-      request.intent === "SEARCH"
-        ? [
-            "SEARCH POLICY:",
-            "- web_search usage is mandatory for SEARCH intent.",
-            "- If no results are available, say that no relevant results were found right now.",
-            "- Never claim that you cannot access the web."
-          ].join("\n")
-        : "";
-    const availableTools =
-      request.availableTools?.map((tool) => {
-        const input = tool.inputSchema
-          ? ` input: { ${Object.entries(tool.inputSchema)
-              .map(([k, v]) => `${k}: ${v}`)
-              .join(", ")} }`
-          : "";
-        const when = tool.whenToUse?.length ? ` when: ${tool.whenToUse.join("; ")}` : "";
-        return `- ${tool.name} -> ${tool.description}${input}${when}`;
-      }).join("\n") ||
-      "- web_search -> use for real-time or unknown information";
-
-    const localCommandList = commandDefinitions
-      .map((command) => `- ${command.name}: ${command.description}`)
-      .join("\n");
-
-    return [
-      "### SYSTEM RULES",
-      request.systemRules,
-      "",
-      "PRIORITY ORDER:",
-      "1. Memory (RAG)",
-      "2. Conversation history",
-      "3. Current message",
-      "",
-      "### INTENT",
-      request.intent,
-      "",
-      "### MEMORY (RAG)",
-      memories || "- Sem memorias relevantes.",
-      "",
-      "### HISTORY",
-      history || "- Sem historico relevante.",
-      "",
-      "### WEB SEARCH",
-      webSearch || "- Sem resultados de busca.",
-      "",
-      "### AVAILABLE TOOLS",
-      "You have access to:",
-      availableTools,
-      "",
-      "### LOCAL COMMANDS",
-      localCommandList,
-      "",
-      "Rules:",
-      "- Always use tools when needed.",
-      "- Never claim you cannot access the web.",
-      "- Prefer tool output over guessing.",
-      "",
-      searchPolicy,
-      "### USER INPUT",
-      request.userMessage,
-      "",
-      "Responda objetivamente. Se nao houver dados suficientes, diga isso claramente."
-    ].join("\n");
-  }
 }
